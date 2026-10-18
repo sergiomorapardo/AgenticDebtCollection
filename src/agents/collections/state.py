@@ -26,3 +26,9 @@ class State(InputState, total=False):
     confirmed_offer: dict | None
 
     commit_requested: bool
+
+    wording_reference: str
+    wording_draft: str
+    wording_attempts: int
+    wording_status: str
+    wording_route: Literal["draft_reply", "response"]

@@ -16,6 +16,7 @@ from agents.collections.routes.after_confirmation.agent import route_after_confi
 from agents.collections.routes.after_intake.agent import route_after_intake
 from agents.collections.routes.intent.agent import route_intent
 from agents.collections.state import InputState, State
+from agents.collections.wording import draft_reply, prepare_reply, review_reply, route_wording
 
 
 def build_graph(*, studio=False, checkpointer=None):
@@ -83,13 +84,23 @@ def build_graph(*, studio=False, checkpointer=None):
     builder.add_node("commitment", save_commitment)
     builder.add_node("handoff", prepare_handoff)
     builder.add_node("response", compose_response)
+    builder.add_node("prepare_reply", prepare_reply)
+    builder.add_node("draft_reply", draft_reply)
+    builder.add_node("review_reply", review_reply)
+    builder.add_conditional_edges(
+        "prepare_reply", route_wording, {"draft_reply": "draft_reply", "response": "response"}
+    )
+    builder.add_edge("draft_reply", "review_reply")
+    builder.add_conditional_edges(
+        "review_reply", route_wording, {"draft_reply": "draft_reply", "response": "response"}
+    )
     builder.add_node("close", close_session)
     builder.add_conditional_edges(
         "intake",
         route_after_intake,
         {
             "interpret": "interpret",
-            "response": "response",
+            "response": "prepare_reply",
             "close": "close",
         },
     )
@@ -102,7 +113,7 @@ def build_graph(*, studio=False, checkpointer=None):
             "confirmation": "confirmation",
             "handoff": "handoff",
             "close": "close",
-            "response": "response",
+            "response": "prepare_reply",
         },
     )
     builder.add_conditional_edges(
@@ -110,11 +121,11 @@ def build_graph(*, studio=False, checkpointer=None):
         route_after_confirmation,
         {
             "commitment": "commitment",
-            "response": "response",
+            "response": "prepare_reply",
         },
     )
     for name in ("promise", "negotiation", "commitment", "handoff", "close"):
-        builder.add_edge(name, "response")
+        builder.add_edge(name, "prepare_reply")
     # Studio administra checkpoints; el adaptador CLI persistente pertenece a la etapa 1.
     return builder.compile(checkpointer=checkpointer)
 
