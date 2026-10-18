@@ -343,10 +343,11 @@ def test_conditional_acceptance_invalidates_offer_before_following_yes(service):
     assert reply["agreement_id"] is None
     assert reply["offer_id"] is None
     assert service.context.repository.agreements() == []
-    # La negociación solo se retoma después de presentar términos concretos nuevamente.
+    # Discount exceptions now terminate in simulated human review.
     renewed = turn(service, "quiero 2 cuotas desde 2026-10-21", "renewed-offer")
-    assert renewed["stage"] == "awaiting_confirmation"
-    assert turn(service, "confirmo", "renewed-accept")["stage"] == "agreed"
+    assert renewed["stage"] == "handoff"
+    assert turn(service, "confirmo", "renewed-accept")["stage"] == "handoff"
+    assert service.context.repository.agreements() == []
 
 
 def test_unauthorized_contact_blocks_start_without_balance_or_contact_record(service, monkeypatch):
