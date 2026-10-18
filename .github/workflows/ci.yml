@@ -22,18 +22,8 @@ jobs:
           enable-cache: true
       - run: uv python install
       - run: uv sync --locked
-      - name: Validate the implementation available in this layer
-        shell: bash
-        run: |
-          paths=(src)
-          if [ -d tests ]; then paths+=(tests); fi
-          uv run ruff check "${paths[@]}"
-          uv run ruff format --check "${paths[@]}"
-          uv run python -m compileall -q src
-          if [ -d tests ]; then
-            uv run pytest -q
-          else
-            echo "Foundation layer: no behavioral tests yet; checking settings import."
-            uv run python -c 'from collections_lab.config.settings import load_settings; assert load_settings().mode == "simulation"'
-          fi
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run pytest -q
+      - run: uv run collections-lab fixtures
       - run: uv build
