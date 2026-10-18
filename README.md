@@ -1,40 +1,38 @@
 # AgenticDebtCollection
 
-A conversational debt collection agent that negotiates payment plans and tracks payment commitments.
+A conversational debt collection agent that negotiates payment plans and records commitments.
+Built with LangGraph for a fictional Colombian fintech.
 
-Agente de cobranza para una fintech ficticia en Colombia, con LangGraph y políticas deterministas.
-**Implementado: primera etapa por texto, ejecutable localmente y en LangGraph Studio.**
-La llamada simulada con micrófono/voz, AWS y la telefonía real pertenecen a etapas posteriores.
+**Available now:** local text conversations through the CLI or LangGraph Studio, with SQLite memory.
+Voice simulation and AWS deployment are [planned stages](docs/ROADMAP.md).
 
-## Qué hace
+```mermaid
+flowchart LR
+    U[CLI or Studio] --> G[LangGraph workflow]
+    G <--> D[(SQLite memory)]
+    G --> R[Validated text reply]
+    G -. Optional intent extraction .-> H[Claude Haiku API]
+    H -. Structured intent .-> G
+    classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
+    class U,G,D,R local
+    class H paid
+```
 
-- Verifica una identidad ficticia antes de revelar el saldo.
-- Comprueba autorización de canal, horario, festivos de Colombia e historial de contacto.
-- Recuerda la obligación y propone pago completo o hasta tres cuotas mensuales.
-- Solicita confirmación explícita de importe y fechas; revalida saldo y política antes de guardar.
-- Persiste sesiones, ofertas, acuerdos y eventos en SQLite. Los reintentos no duplican acuerdos.
-- Deriva de forma simulada disputas, pagos reportados y solicitudes de asesor.
-- Mantiene la distinción entre compromiso registrado y pago verificado.
+Green runs locally. Orange is an optional paid API. The default `mock` provider uses a limited,
+offline Spanish parser; code calculates amounts, enforces policy, and composes replies in both modes.
 
-El modo **mock** es un parser limitado y reproducible, sin llamadas de red. **anthropic** utiliza
-Claude Haiku para extraer intención y términos mediante API. Los importes y las respuestas de
-negocio se calculan/forman en código en ambos modos. No hay fallback automático de proveedor.
-La integración de Haiku está implementada, pero no se ha ejecutado con credenciales reales.
+## Run a conversation
 
-## Inicio rápido
-
-Requiere Python 3.12 y uv. Desde la raíz del checkout/worktree:
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --locked
 cp -n .env.example .env
-uv run collections-lab chat --session prueba-001
+uv run collections-lab chat --database .local/quickstart.sqlite3 --session quickstart --provider mock
 ```
 
-El CLI muestra el **reloj ficticio fijo: 2026-10-19 09:00, America/Bogota**. Puedes cambiarlo
-con `--at 2026-10-20T10:00:00-05:00`. No representa la fecha real del equipo.
-
-Prueba esta conversación:
+Type the following. Customer messages stay in Spanish to match the Colombia demo.
 
 ```text
 verificar 1111
@@ -42,99 +40,113 @@ quiero 3 cuotas desde 2026-10-20
 confirmo
 ```
 
-El escenario demo-001 tiene saldo de 600.000 COP. Se proponen tres cuotas de 200.000;
-el acuerdo se guarda después de confirmar. demo-002 tiene saldo de 450.000 y código ficticio 2222.
-**Los códigos son datos de prueba, no un método de autenticación para clientes reales.**
-
-También puedes decir `pago 600000 mañana`, `ya pagué`, `no reconozco la deuda`, `quiero un asesor`
-o `terminar`. `/salir` sale del CLI conservando la sesión. Las fechas aisladas pueden completar
-una propuesta pendiente; la interpretación offline no cubre lenguaje libre general.
+```mermaid
+sequenceDiagram
+    actor Customer
+    participant Agent as LangGraph
+    participant Store as SQLite
+    Agent->>Customer: Request demo identity verification
+    Customer->>Agent: Verify identity (1111)
+    Agent->>Customer: Balance: COP 600,000
+    Customer->>Agent: Request 3 installments starting Oct 20
+    Agent->>Customer: COP 200,000 on Oct 20, Nov 20, Dec 20
+    Customer->>Agent: Confirm the presented plan
+    Agent->>Store: Revalidate and save commitment + turn atomically
+    Store-->>Agent: Saved
+    Agent->>Customer: Commitment recorded, balance remains unpaid
+```
 
 ```bash
-uv run collections-lab agreements
+uv run collections-lab agreements --database .local/quickstart.sqlite3
 uv run collections-lab fixtures
 uv run collections-lab graph
 ```
 
-La base se guarda en `.local/collections.sqlite3`, ignorada por Git. Al repetir la misma sesión,
-se recupera su estado. Las sesiones finalizadas no se reabren. Una sesión nueva con la misma
-cuenta el mismo día queda bloqueada por el historial. Para un escenario de prueba independiente,
-usa otro archivo explícito, por ejemplo `--database .local/otro-escenario.sqlite3`.
+- **Fixed demo clock:** October 19, 2026, 09:00, America/Bogota. Override with `--at`.
+- **Fixtures:** `demo-001`: COP 600,000 / code `1111`; `demo-002`: COP 450,000 / code `2222`.
+- **Fresh scenario:** choose a new database file. Reusing an account on the same day can trigger the contact limit.
+- **Resume:** reuse the session and database. `/salir` exits the CLI; `terminar` closes the session. Finished sessions stay closed.
 
-## Turnos reproducibles
+Identity codes are test data, not customer authentication. This local demo uses synthetic debts;
+it is not ready for public access or a real collections pilot.
 
-```bash
-uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 1 --text ''
-uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 2 --text 'verificar 1111'
-uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 3 --text 'pago 600000 mañana'
-uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 4 --text 'confirmo'
+## Explore the examples
+
+After identity verification, choose a path. A payment commitment never marks the debt as paid.
+
+```mermaid
+flowchart TD
+    V[Verified customer] --> P{Customer request}
+    P --> F[Full payment: COP 600,000 tomorrow]
+    P --> N[Plan: 3 monthly installments]
+    F --> O[Present amounts and dates]
+    N --> O
+    O --> C{Explicit confirmation of a valid offer?}
+    C -->|Yes| S[Revalidate and record commitment]
+    C -->|Unclear or rejected| X[Invalidate offer; request new terms]
+    P --> H[Reported payment, dispute, or advisor request]
+    H --> E[Simulated human review; end this session]
 ```
 
-El mismo event_id con igual contenido devuelve el resultado guardado; con otro contenido falla.
-La sesión queda vinculada a una cuenta. Una oferta ambigua o rechazada se invalida: un `sí`
-posterior a una aclaración no confirma la oferta anterior; hay que presentar términos de nuevo.
+| Example | Type after verification | Result |
+| --- | --- | --- |
+| Full payment | `pago 600000 mañana` → `confirmo` | One commitment for October 20 |
+| Payment plan | `quiero 3 cuotas desde 2026-10-20` → `confirmo` | Three monthly installments |
+| Reported payment | `ya pagué` | Human review; no payment recorded |
+| Disputed debt | `no reconozco la deuda` | Human review; negotiation stops |
+| Advisor | `quiero un asesor` | Simulated handoff |
+| End conversation | `terminar` | Session closes |
 
-## LangGraph Studio
+The mock parser is deliberately limited. An unclear reply invalidates the pending offer;
+a later bare confirmation cannot accept it. Present new terms first.
+
+## Inspect each turn in Studio
 
 ```bash
 uv run langgraph dev
 ```
 
-Selecciona `collections_agent`. Usa el mismo session_id y account_id durante la conversación,
-y un event_id nuevo en cada ejecución. Crea un thread de Studio por sesión de prueba. Ejemplo:
+Select `collections_agent`, create one Studio thread for the session, and start with:
 
 ```json
 {"session_id":"studio-001","account_id":"demo-002","event_id":"1","text":""}
 ```
 
-Después cambia event_id a `2` y text a `verificar 2222`; continúa con la propuesta y confirmación.
-Los controles se ejecutan en los nodos. Studio guarda sus checkpoints; SQLite es la fuente de
-verdad de sesiones y acuerdos. No edites el estado interno como si fuera entrada del usuario.
-Studio es una herramienta de desarrollo, no una interfaz pública de clientes.
+Keep the session and account IDs; change the event ID and text for each turn:
 
-## Haiku opcional
+```mermaid
+flowchart LR
+    A["1: empty text"] --> B["2: verificar 2222"]
+    B --> C["3: pago 450000 mañana"]
+    C --> D["4: confirmo"]
+    A -.-> S[awaiting_identity]
+    B -.-> T[ready]
+    C -.-> U[awaiting_confirmation]
+    D -.-> V[agreed]
+```
 
-Configura tu propia ANTHROPIC_API_KEY en el .env local y ejecuta:
+SQLite is the business source of truth; Studio manages development checkpoints.
+Use the four public input fields above, not internal state. The default database is
+`.local/collections.sqlite3`; independent scenarios need separate database files.
+
+## Optional Haiku extraction
+
+Set your own `ANTHROPIC_API_KEY` in the local `.env`, then run:
 
 ```bash
 uv run collections-lab chat --database .local/haiku.sqlite3 --session haiku-001 --provider anthropic
 ```
 
-Esto consume tokens. Modelo por defecto: `claude-haiku-4-5-20251001`. No se copian claves de otros
-repositorios. LANGSMITH_TRACING=false por defecto; no se han generado trazas pagadas en validación.
+This consumes tokens using `claude-haiku-4-5-20251001`. There is no automatic provider fallback.
+Live Haiku calls have not been validated; tracing is disabled by default.
 
-## Organización
+## Explore the repository
 
-```text
-src/agents/collections/
-  agent.py, state.py, config.py, memory.py, runtime.py
-  domain.py, policy.py, contact.py, interpreter.py
-  nodes/<name>/      node.py, prompt.py, tools.py
-  routes/<name>/     agent.py, state.py
-  data/             fixtures/ y policies/
-src/collections_lab/
-  config/           configuración común
-  channels/         entrada pública validada
-  service.py        servicio local por turno
-apps/voice_simulator/   etapa 2 pendiente
-infra/                 etapa de despliegue pendiente
-eval/                  escenarios y costos
-```
-
-Estructura basada en Alianza Team; ver NOTICE.md. El AGENTS.md inicial se copió literalmente de
-AdvancedGenAI y fue el único archivo del primer commit. El desarrollo se realiza en worktrees.
-
-## Validación
-
-```bash
-uv run pytest -q
-uv run ruff check src tests
-uv run ruff format --check src tests
-uv lock --check
-uv build
-```
-
-Las pruebas cubren reglas, interpretación, workflow, recuperación, transacciones, concurrencia
-y reintentos sin llamar a APIs externas. Ver [arquitectura](docs/ARCHITECTURE.md) y
-[etapas](docs/ROADMAP.md). Este entorno usa datos sintéticos y no acredita cumplimiento legal
-completo ni está diseñado para exponerse a Internet. Staging requiere autenticación y aislamiento.
+| Start here | What you will see |
+| --- | --- |
+| [Architecture](docs/ARCHITECTURE.md) | Exact graph, routing, storage, and policy boundaries |
+| [Roadmap](docs/ROADMAP.md) | Text → simulated voice → staging → telephony |
+| [Validation](docs/VALIDATION.md) | Reproducible turns and verified vs. pending checks |
+| [Agent implementation](src/agents/collections) | Nodes, routes, fixtures, and policies |
+| [Tests](tests/README.md) | Offline checks |
+| [Attribution](NOTICE.md) | Structural and visual references |
