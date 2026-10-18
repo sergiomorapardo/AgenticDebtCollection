@@ -1,0 +1,20 @@
+[
+  {
+    "account_id": "demo-001",
+    "customer_label": "Cliente ficticio A",
+    "synthetic": true,
+    "currency": "COP",
+    "balance_cop": 600000,
+    "account_version": "v1",
+    "due_date": "2026-10-01"
+  },
+  {
+    "account_id": "demo-002",
+    "customer_label": "Cliente ficticio B",
+    "synthetic": true,
+    "currency": "COP",
+    "balance_cop": 450000,
+    "account_version": "v1",
+    "due_date": "2026-10-05"
+  }
+]
