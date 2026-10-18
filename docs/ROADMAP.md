@@ -24,17 +24,17 @@ flowchart TD
 
 ## Local voice simulation
 
-**Implemented locally:** push-to-talk Gradio turns with automatic transcription, sending, and audio
+**Implemented locally:** a standalone HTML call interface over a local FastAPI API, with push-to-talk turns with automatic transcription, sending, and audio
 playback. Browser playback completion enables the next reply. Continuous listening and
 interruption-aware playback tracking remain planned.
 
 ```mermaid
 flowchart LR
-    M[Microphone or uploaded audio] --> S[Speech to text]
+    M[Browser microphone] --> S[Speech to text]
     S --> G[Existing text workflow]
     G --> T[Text to speech]
     T --> B[Automatic browser playback]
-    G --> P[Transcript, offer, and saved commitment panel]
+    G --> P[Collapsible conversation transcript]
 ```
 
 The browser's audio-ended event is bound to the current response audio before enabling

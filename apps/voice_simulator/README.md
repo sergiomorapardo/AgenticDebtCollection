@@ -1,24 +1,29 @@
 # Local voice simulator
 
-A local Gradio application wraps the existing conversational graph with ElevenLabs.
-It uses push-to-talk turns and synthetic customer fixtures, without dialing telephone numbers.
+A standalone HTML/CSS/JavaScript call interface talks to a same-origin FastAPI server.
+The server reuses the existing conversational graph and ElevenLabs adapters; credentials
+remain on the server. No frontend framework, asset CDN, or separate frontend build is required.
+The interface uses translucent surfaces, a call timer, microphone/hangup controls, automatic
+response playback, and an optional transcript with typed replies.
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant UI as Browser simulator
-    participant STT as ElevenLabs Scribe v2
+    participant UI as Browser call interface
+    participant API as Local FastAPI server
+    participant Speech as ElevenLabs
     participant Agent as Existing graph and SQLite
-    participant TTS as ElevenLabs speech
     User->>UI: Start once, then record and stop
-    UI->>STT: Audio (maximum 10 MB)
-    STT-->>UI: Transcript sent automatically
-    UI->>Agent: Stable thread and new message ID
-    Agent-->>UI: Persisted, reviewed response
-    UI->>TTS: Response text
-    TTS-->>UI: MP3
-    UI->>User: Autoplay agent response
-    UI->>UI: Audio ended enables next reply
+    UI->>API: Audio, session cookie, and request ID
+    API->>Speech: Transcribe recording
+    Speech-->>API: Transcript
+    API->>Agent: New business turn
+    Agent-->>API: Persisted, reviewed response
+    API->>Speech: Synthesize complete response
+    API-->>UI: State and session-scoped audio URL
+    UI->>User: Autoplay response
+    UI->>API: Current audio ended
+    API-->>UI: Enable next reply
 ```
 
 ## Run
@@ -30,87 +35,100 @@ cp -n .env.example .env
 uv run --extra voice collections-voice --provider mock
 ```
 
-Open http://127.0.0.1:7860. The server binds only to loopback and disables public sharing.
-The API key needs Text to Speech and Speech to Text access. The voice must be accessible
-through the API for your account. The default speech models are `scribe_v2` and
+Open http://127.0.0.1:7860. Open the HTML through this server, not as a `file://` document.
+The server binds only to loopback. Microphone capture requires browser permission.
+The API key needs Text to Speech and Speech to Text access, and the voice must be
+available to your account through the API. Defaults are `scribe_v2` and
 `eleven_multilingual_v2`. There are no automatic charged retries.
 
-For conversational interpretation with Claude Haiku, also set `ANTHROPIC_API_KEY` and run:
+For interpretation with Claude Haiku, set `ANTHROPIC_API_KEY` and run:
 
 ```bash
 uv run --extra voice collections-voice --provider anthropic
 ```
 
-Haiku uses the existing bounded interpretation and reviewed wording flow. Speculative
-streaming tokens are not spoken. `mock` uses no LLM, but speech still consumes ElevenLabs credits.
+`mock` uses no LLM, but speech still consumes ElevenLabs credits. Complete responses pass
+the existing business checks before synthesis; speculative tokens are never spoken.
 
 ## Try a conversation
 
-1. Click **Iniciar conversación** once. The agent greeting plays automatically.
-2. When **Responder** appears, record your answer and stop. Transcription and sending
-   happen automatically; no transcript approval or send button is required.
-3. Identify with `Mi cédula es 1000000001`, then `verificar 1111`.
+1. Click **Iniciar llamada**. The greeting plays automatically.
+2. When **Es tu turno** appears, click the microphone, speak, then click it again to send.
+   Transcription, sending, and response playback happen automatically.
+3. Say `Mi cédula es 123456789`, then `verificar 1111`.
 4. Request `quiero 3 cuotas desde 2026-10-20`.
-5. Wait for the proposal audio to finish, then record `confirmo`.
+5. Wait for the proposal audio to finish, then say `confirmo`.
 
-**Opciones** contains typed input (Enter sends), audio file input (upload sends),
-audio retry, and conversation termination. The conversation transcript remains visible.
+The red **Colgar** button ends the conversation, stops browser audio/capture, and avoids
+an extra synthesized goodbye. **Ver conversación o escribir** expands the transcript and
+text fallback; Enter sends. Recordings stop at 60 seconds and are limited to 10 MB.
 
-The additional fictional ID `123456789` selects the same `demo-001` account as
-`1000000001`: verification code `1111`, initial balance COP 600,000. This is an alias,
-not a separate customer or debt. The second fixture uses `1000000002` and code `2222`. The default demo clock remains
-October 19, 2026, America/Bogota. A saved commitment never marks a debt as paid.
+The fictional ID `123456789` aliases `1000000001`, selecting `demo-001`, code `1111`,
+and initial balance COP 600,000. It is not a separate customer or debt. The second fixture
+uses `1000000002` and code `2222`. The demo clock is October 19, 2026, America/Bogota.
+A saved commitment never marks a debt as paid.
 
-## Recovery and local state
+## API and recovery
 
-- Responses play automatically. If browser autoplay is blocked, press play once on the
-  agent player. The reply control appears after playback ends; pausing does not unlock it.
-- A failed speech request leaves the text and business turn saved. **Reintentar audio**
-  regenerates only the latest audio, never the agreement or business turn.
-- An offer with failed audio blocks negotiation until audio generation and playback succeed.
-- Playback completion resets for every response and audio regeneration. The server rejects
-  stale audio events and blocks subsequent offer turns, including renegotiation.
-  **Terminar conversación** in **Opciones** remains available without playback completion.
-- Transcription errors leave the business turn unchanged; record again or use typed input.
-- Each new session has an isolated SQLite database and response MP3s in `.local/voice/<id>/`.
-  Playback-ended events record the response/audio IDs in that directory. Files stay local and ignored.
-- Browser session handles expire after one hour; refreshing starts a new UI session.
-  Old local evidence remains on disk. There is no browser resume feature yet.
-- `.env` is local to each worktree. Git only distributes `.env.example`; never commit credentials.
+| Route | Purpose |
+| --- | --- |
+| `GET /api/session` | Restore current call, transcript, playback state, and elapsed time |
+| `POST /api/start` | Begin an isolated conversation |
+| `POST /api/text` | Send a JSON `text` reply |
+| `POST /api/recording` | Transcribe raw WebM, Ogg, MP4, or WAV and send one turn |
+| `GET /api/audio/{audio_id}` | Read the current audio belonging to this browser session |
+| `POST /api/playback` | Acknowledge completion of the current `audio_id` |
+| `POST /api/retry` | Regenerate current response audio without repeating the business turn |
+| `POST /api/end` | End the current conversation |
+
+The page establishes an HttpOnly, SameSite=Strict session cookie. Mutations require
+`X-Voice-Client: 1`, a UUID `X-Request-ID`, and (except start) the current `X-Call-ID`.
+Foreign browser origins and unknown hosts are rejected. Responses expose audio IDs, not
+filesystem paths. Calls serialize per browser session. The latest 128 request IDs and
+results are cached in memory, including uncertain failures; replaying the same request
+within this window avoids duplicate provider calls and business writes.
+
+- If autoplay is blocked, **Escuchar mensaje** starts playback. Only the current audio's
+  ended event unlocks the next reply; stale events cannot unlock a regenerated offer.
+- **Reintentar audio** only synthesizes the saved response. An offer with failed audio
+  blocks negotiation until synthesis and playback succeed. Hanging up remains available.
+- Transcription errors leave the business turn unchanged. Record again or use typed input.
+- A network failure offers an explicit retry with the original request ID and payload.
+  A pending reply arriving after hangup cannot restart browser playback.
+- Refreshing restores the current call and timer while the server and session remain alive.
+  An unplayed response offers manual playback after reload. Tabs sharing the cookie share
+  the same call. Sessions expire after one hour; server restart clears browser sessions.
+- Each call has isolated SQLite state, response MP3s, and playback-event evidence under
+  ignored `.local/voice/<id>/`. Uploaded recording files are removed after transcription;
+  saved response audio and business evidence remain on disk.
+- `.env` is local to each worktree. Git only distributes `.env.example`.
 
 ## Boundaries
 
-This is a single-user local demo. Browser-ended events are tied to the current audio, but
-do not prove that audio was audible or listened to without seeking. Continuous listening,
-barge-in, stronger playback tracking, authentication, and production telephony are planned.
-Streaming remains a TODO; each complete response is validated before speech generation.
-Only the audio and response text needed for speech are sent to ElevenLabs. Use fictional data.
+This is a local demo API, not a production authentication boundary or telephone service.
+Browser-ended events do not prove audibility or attention. Continuous listening, barge-in,
+stronger playback tracking, production authentication, and telephony remain planned.
+Streaming remains a TODO, including its Free-plan endpoint/credit validation. Only audio
+and text needed for speech are sent to ElevenLabs. Use fictional data.
 
-## Voice checks
+## Verification
 
-`uv sync --locked --extra voice` installs the optional simulator dependencies.
-`uv run --extra voice pytest -q tests/test_voice.py` uses fake audio and a mock HTTP
-transport: no paid calls. It covers request shape, redacted failures, automatic transcription/send,
-current-offer playback completion, stale events, TTS retries without duplicate agreements, session isolation,
-and Gradio construction. Existing workflow tests remain applicable.
+`uv run --extra voice pytest -q` passes 296 tests. Voice tests use fake speech and mock HTTP
+transport without paid calls. They cover provider request shape, redacted errors, automatic
+transcription/send, offer playback gating, retries without duplicate agreements, session/audio
+isolation, request replay, stale call IDs, origin/size checks, reload timing, and uncertain failures.
+Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
 
-Live TTS was verified with the configured designed voice (HTTP 200, MP3) before PR #28.
-Live Scribe v2 transcribed a generated customer clip as `Quiero tres cuotas desde mañana`.
-In the earlier manual UI, Chrome typed identity turns followed by that transcript produced three COP 200,000
-installments. Confirmation without acknowledgement was rejected; after full playback and
-manual acknowledgement, exactly one unpaid commitment was found in SQLite. Transcribing
-the offer audio preserved its amounts and dates.
+Chrome verification with previously generated audio covers greeting/reply autoplay, enabling
+reply controls after playback, Enter-to-send, session reload, and hangup. The cached audio is
+a UI test double, not a validation of newly generated speech content. Responsive layout is
+checked at desktop and mobile widths. Physical microphone capture still needs manual acceptance.
 
-Browser file upload automation was blocked by the Chrome extension's local-file permission;
-physical microphone capture was unavailable in that browser session. Those two UI input
-paths still need manual acceptance. STT was validated directly through the same adapter.
-The simplified UI was verified in Chrome using a cached speech test double (no additional
-provider credits): initial and subsequent response autoplay, Enter-to-send, pause keeping
-the reply control disabled, and audio-ended enabling the recorder. Offline tests exercise
-the recording callback, transcription failure, stale audio events, and retry gating.
-Physical microphone capture still requires manual acceptance. No automatic interruption
-or audibility claim is made. Keep live evidence under ignored
-`.validation/`.
-
+Earlier live adapter validation confirmed TTS MP3 generation with the configured designed
+voice and Scribe v2 transcription of `Quiero tres cuotas desde mañana`. In the earlier UI,
+that transcript produced three COP 200,000 installments; confirmation before playback was
+rejected and completion saved exactly one unpaid commitment. This is adapter/business-flow
+evidence, not a physical microphone test of the new frontend. Keep live evidence under
+ignored `.validation/`.
 
 [Roadmap](../../docs/ROADMAP.md) · [Validation](../../docs/VALIDATION.md)
