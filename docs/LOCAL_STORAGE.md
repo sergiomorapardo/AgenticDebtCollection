@@ -73,14 +73,38 @@ The business repository and graph checkpointer are separate migration decisions.
 | After a squash merge | Current policy |
 | --- | --- |
 | Remote PR source branch | Deleted automatically |
-| Local branch | Retained |
-| Local worktree directory | Retained |
-| Ignored local database, `.env`, `.venv`, checkpoints | Remain in that checkout; never merged into `main` |
+| Local branch | Removed by local post-merge cleanup after eligibility checks |
+| Local worktree directory | Removed when merged, clean, unlocked, and not in use |
+| Ignored local database, `.env`, checkpoints | Backed up locally before removal; never merged into `main` |
+| Rebuildable environments and caches | Removed with the worktree |
 | Commit history | Squash commit on `main`; original commits remain inspectable through the PR |
 
-This follows [AGENTS.md](../AGENTS.md): automatic remote cleanup does not authorize removing
-local branches or worktrees. Before any requested local cleanup, inspect uncommitted changes
-and preserve needed ignored data. Deleting a worktree can remove its local database;
-merging the branch does not copy that database into the primary checkout.
+Requires Python 3.9+, Git, authenticated GitHub CLI (`gh`), and `lsof` (macOS/Linux).
+Run from the primary checkout after review and required CI:
+
+```bash
+python3 scripts/merge_pr.py 21  # Replace with the intended PR number
+```
+
+It squash-merges the PR, updates the clean primary checkout, then cleans eligible merged
+branches/worktrees. A PR merged through GitHub needs this local command afterward (an already
+merged PR is supported); GitHub's remote setting cannot delete local directories.
+
+```bash
+python3 scripts/cleanup_merged.py          # Audit only
+python3 scripts/cleanup_merged.py --apply  # Clean old merged branches/worktrees
+```
+
+The cleanup preserves primary, active, dirty, locked, open-PR, and unmerged/divergent work.
+Squash/rebased heads require matching complete trees and a merged PR present on main.
+Closed-without-merge branches are retained unless independently reachable from main.
+Backups under `.validation/worktree-cleanup/<timestamp>/` include a manifest, a Git bundle
+of all removed local and remote branch tips, and verified archives of non-rebuildable ignored files.
+Archives can contain local credentials: keep them private and out of version control.
+`.venv`, build output, and caches are rebuildable and excluded. No backup is published.
+
+For recovery, inspect `manifest.json`; `git bundle list-heads branches.bundle` lists saved
+branch tips. Extract a data archive into a separate recovery directory before selecting files
+to restore. Merging never moves a worktree's database into the primary checkout.
 
 See [use cases](USE_CASES.md) for persistence, replay, concurrency, and migration acceptance cases.
