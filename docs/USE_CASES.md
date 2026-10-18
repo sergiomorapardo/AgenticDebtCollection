@@ -196,3 +196,16 @@ API/graph regressions, not a claim of manual browser coverage. See [negotiation]
 | CB-04 | Legitimate closure → complaint → `continuemos` | Empathetic explanation; remain closed | A: `test_explicit_close_stays_closed_but_acknowledges_complaint` |
 | CB-05 | Recognized historical false closure → `continuemos` | Recover only on explicit request; preserve history, replay, and single contact | A: `test_legacy_wrong_close_requires_explicit_resume_and_preserves_history` |
 | CB-06 | Old closure caused by a real stop, or later stop/refusal | Never reopen via legacy recovery | A: `test_legacy_real_exit_never_reopens` |
+
+
+## Pre-verification dialogue
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| OB-01 | Greeting → profane refusal → repeated refusal → misspelled payment intent | Acknowledge, pause, then explain identity step; later negotiation works | `test_screenshot_sequence_acknowledges_refusal_then_payment_intent` |
+| OB-02 | Pause → restart without checkpoints → greeting | Preserve pause; do not ask for ID again | `test_paused_onboarding_persists_without_checkpoint_and_replays` |
+| OB-03 | Selected customer → complaint or process question | No verification attempt consumed or history exposed | `test_conversation_does_not_spend_identity_attempts` |
+| OB-04 | Explicit stop → payment intent | Stay closed | `test_stop_before_verification_stays_closed` |
+| OB-05 | Model predicts willingness or fails | No identity authority; visible error with retry on failure | `test_structured_interpreter_has_no_identity_authority`, `test_model_failure_keeps_thread_open_and_reports_error` |
+
+CI also replays OB-01 through the running LangGraph server before testing verified flows.
