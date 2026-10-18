@@ -48,13 +48,13 @@ The scenario catalog is in [eval/scenarios.json](../eval/scenarios.json); audio 
 
 `uv sync --locked --extra voice` installs the optional simulator dependencies.
 `uv run --extra voice pytest -q tests/test_voice.py` uses fake audio and a mock HTTP
-transport: no paid calls. It covers request shape, redacted failures, transcript review,
-current-offer acknowledgement, TTS retries without duplicate agreements, session isolation,
+transport: no paid calls. It covers request shape, redacted failures, automatic transcription/send,
+current-offer playback completion, stale events, TTS retries without duplicate agreements, session isolation,
 and Gradio construction. Existing workflow tests remain applicable.
 
 Live TTS was verified with the configured designed voice (HTTP 200, MP3) before PR #28.
 Live Scribe v2 transcribed a generated customer clip as `Quiero tres cuotas desde mañana`.
-In Chrome, typed identity turns followed by that transcript produced three COP 200,000
+In the earlier manual UI, Chrome typed identity turns followed by that transcript produced three COP 200,000
 installments. Confirmation without acknowledgement was rejected; after full playback and
 manual acknowledgement, exactly one unpaid commitment was found in SQLite. Transcribing
 the offer audio preserved its amounts and dates.
@@ -62,7 +62,12 @@ the offer audio preserved its amounts and dates.
 Browser file upload automation was blocked by the Chrome extension's local-file permission;
 physical microphone capture was unavailable in that browser session. Those two UI input
 paths still need manual acceptance. STT was validated directly through the same adapter.
-No automatic interruption or audibility claim is made. Keep live evidence under ignored
+The simplified UI was verified in Chrome using a cached speech test double (no additional
+provider credits): initial and subsequent response autoplay, Enter-to-send, pause keeping
+the reply control disabled, and audio-ended enabling the recorder. Offline tests exercise
+the recording callback, transcription failure, stale audio events, and retry gating.
+Physical microphone capture still requires manual acceptance. No automatic interruption
+or audibility claim is made. Keep live evidence under ignored
 `.validation/`.
 
 ## Run the checks

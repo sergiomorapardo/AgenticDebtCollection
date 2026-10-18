@@ -4,7 +4,7 @@ A conversational debt collection agent that negotiates payment plans and records
 Built with LangGraph for a fictional Colombian fintech.
 
 **Available now:** local text conversations through the CLI or LangGraph Studio, with SQLite memory.
-A [local voice simulator](apps/voice_simulator/README.md) adds manual microphone turns with ElevenLabs. AWS deployment remains a [planned stage](docs/ROADMAP.md).
+A [local voice simulator](apps/voice_simulator/README.md) adds push-to-talk microphone turns with ElevenLabs. AWS deployment remains a [planned stage](docs/ROADMAP.md).
 
 ```mermaid
 flowchart LR
@@ -81,9 +81,9 @@ uv sync --locked --extra voice
 uv run --extra voice collections-voice --provider mock
 ```
 
-Open http://127.0.0.1:7860. Start a session, record or upload audio, transcribe,
-review the text, and send the turn. ElevenLabs calls consume credits. Use the audio
-player to listen; acknowledge the complete offer before continuing a negotiation.
+Open http://127.0.0.1:7860. Start a conversation, then record a response. Stopping the recording automatically
+transcribes and sends it; the agent response plays automatically. The next reply is enabled
+after playback ends. Text and file input are under **Opciones**. ElevenLabs calls consume credits.
 Each new demo session has an isolated SQLite database. See the
 [voice guide](apps/voice_simulator/README.md) for limitations and Haiku mode.
 

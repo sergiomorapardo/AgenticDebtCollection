@@ -4,7 +4,7 @@ Solid green = implemented locally. Dashed paths = future stages.
 
 ```mermaid
 flowchart TD
-    A[1. Text: CLI + Studio + SQLite] --> B[2. Manual local voice simulation]
+    A[1. Text: CLI + Studio + SQLite] --> B[2. Push-to-talk local voice simulation]
     B -.-> C[3. Authenticated web simulator on staging]
     C -.-> D[4. Test telephony with explicitly authorized numbers]
     D -.-> E[5. Controlled pilot with reviewed policies]
@@ -24,22 +24,23 @@ flowchart TD
 
 ## Local voice simulation
 
-**Implemented locally:** manual Gradio turns with ElevenLabs transcription and speech.
-Continuous listening, automatic playback tracking, and interruption handling remain planned.
+**Implemented locally:** push-to-talk Gradio turns with automatic transcription, sending, and audio
+playback. Browser playback completion enables the next reply. Continuous listening and
+interruption-aware playback tracking remain planned.
 
 ```mermaid
 flowchart LR
     M[Microphone or uploaded audio] --> S[Speech to text]
-    S --> R[Review transcript] --> G[Existing text workflow]
+    S --> G[Existing text workflow]
     G --> T[Text to speech]
-    T --> B[Browser speaker]
+    T --> B[Automatic browser playback]
     G --> P[Transcript, offer, and saved commitment panel]
 ```
 
-The first version requires manual acknowledgement of the current complete offer after
-audio is generated, before sending the next turn. An acknowledgement is recorded against
-the response and audio; it is not automatic proof of playback or audibility.
-Automatic interruption-aware playback tracking remains a later iteration.
+The browser's audio-ended event is bound to the current response audio before enabling
+another reply. Offer confirmation is also gated on the server; events for older audio
+cannot unlock a new offer. An ended event does not prove audibility or uninterrupted
+listening. Stronger interruption-aware playback tracking remains a later iteration.
 
 ### TODO: streaming voice
 
@@ -48,7 +49,7 @@ Automatic interruption-aware playback tracking remains a later iteration.
 - [ ] Validate the streaming endpoint with the configured voice and Free account,
   recording credits before and after the test, latency, and playback completion.
 - [ ] Add realtime transcription, interruption handling, and reliable full-offer
-  playback tracking in a later iteration. Keep manual turns as the current baseline.
+  playback tracking in a later iteration. Keep push-to-talk turns as the current baseline.
 
 No AWS resources or real telephone calls are included.
 See [voice simulation](../apps/voice_simulator/README.md) and [deployment](../infra/README.md).
