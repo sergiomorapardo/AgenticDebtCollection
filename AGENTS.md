@@ -39,3 +39,10 @@
 - Apply corrections to the lowest layer that owns the change, then update dependent layers in order and verify the resulting ancestry and diffs.
 - Merge stacked pull requests from bottom to top using squash merge. After each merge, verify that GitHub correctly rebases or retargets the remaining stack before continuing.
 
+
+## Documentation
+
+- Write READMEs, guides, contribution templates, and diagram labels in English.
+- Prefer concise Mermaid flows, sequence diagrams, and comparison tables over long prose.
+- Keep diagrams aligned with code and label planned capabilities explicitly.
+- Preserve runnable Spanish customer utterances where required by the Colombia demo; explain them in English.

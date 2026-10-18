@@ -1,6 +1,16 @@
-# Costos y latencia
+# Cost and latency measurements
 
-No se han ejecutado APIs de modelos, transcripción, voz ni telefonía.
-Medir por sesión: turnos, tokens de entrada/salida, caracteres TTS, segundos STT,
-tiempo hasta primer texto/audio, errores y costo por servicio. Proveedor y versión explícitos.
-Establecer presupuesto antes de evaluaciones pagadas; tracing desactivado por defecto.
+No paid model, speech, or telephony calls have been used for validation. No cost or latency
+benchmark is available yet; agree on a budget before running paid evaluations.
+
+| Measure per session | Unit |
+| --- | --- |
+| Conversation length | Turns |
+| Model usage | Input/output tokens, provider, and model version |
+| Speech synthesis | Characters and provider/version |
+| Speech recognition | Audio seconds and provider/version |
+| Responsiveness | Time to first text and first audible response |
+| Reliability | Errors and retries by service |
+| Spend | Cost by service and session |
+
+Tracing is disabled by default. Voice measurements depend on [stage 2](../docs/ROADMAP.md).
