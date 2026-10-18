@@ -98,7 +98,7 @@ class ChatMemory:
 def summarize_history(history):
     """Extract facts and short excerpts; original records remain authoritative."""
     if not history["count"]:
-        return "No tienes conversaciones anteriores verificadas en esta simulación."
+        return "No encontré conversaciones anteriores verificadas sobre tu cuenta."
     lines = [
         f"Recuperé {history['count']} conversación(es) anterior(es). Resumen de las últimas tres:"
     ]
