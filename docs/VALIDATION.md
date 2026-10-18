@@ -38,11 +38,32 @@ Change its text while keeping the same event ID: expect a conflict.
 | Pending | Requires |
 | --- | --- |
 | Broader live Haiku evaluation | More varied utterances, adversarial inputs, latency/cost measurement, and real outage tests |
-| Voice and interruption handling | Stage 2 implementation and playback checks |
+| Physical microphone and automatic interruption handling | Manual microphone acceptance and a later continuous-audio implementation |
 | AWS and real telephony | Later-stage deployment and channel validation |
 
 No model, speech, telephony, or business API calls were used for the offline validation.
 The scenario catalog is in [eval/scenarios.json](../eval/scenarios.json); audio interruption is a future case.
+
+## Voice checks
+
+`uv sync --locked --extra voice` installs the optional simulator dependencies.
+`uv run --extra voice pytest -q tests/test_voice.py` uses fake audio and a mock HTTP
+transport: no paid calls. It covers request shape, redacted failures, transcript review,
+current-offer acknowledgement, TTS retries without duplicate agreements, session isolation,
+and Gradio construction. Existing workflow tests remain applicable.
+
+Live TTS was verified with the configured designed voice (HTTP 200, MP3) before PR #28.
+Live Scribe v2 transcribed a generated customer clip as `Quiero tres cuotas desde mañana`.
+In Chrome, typed identity turns followed by that transcript produced three COP 200,000
+installments. Confirmation without acknowledgement was rejected; after full playback and
+manual acknowledgement, exactly one unpaid commitment was found in SQLite. Transcribing
+the offer audio preserved its amounts and dates.
+
+Browser file upload automation was blocked by the Chrome extension's local-file permission;
+physical microphone capture was unavailable in that browser session. Those two UI input
+paths still need manual acceptance. STT was validated directly through the same adapter.
+No automatic interruption or audibility claim is made. Keep live evidence under ignored
+`.validation/`.
 
 ## Run the checks
 
