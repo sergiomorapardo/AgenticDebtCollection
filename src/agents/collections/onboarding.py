@@ -97,9 +97,9 @@ def onboarding_reply(text, binding, ctx):
     selected = bool(binding["account_id"])
     stage = "awaiting_identity" if selected else "awaiting_customer"
     step = (
-        "Para continuar, escribe verificar y el código ficticio del escenario."
+        "Para continuar, compárteme el código de verificación."
         if selected
-        else "Si quieres continuar, usa una cédula ficticia de la demo: 1000000001 o 1000000002. No uses datos reales."
+        else "Para consultar tu cuenta, ¿me compartes tu número de identificación?"
     )
     history = binding.get("onboarding_history", [])[-4:]
     status = "classified"
@@ -113,7 +113,7 @@ def onboarding_reply(text, binding, ctx):
         response = (
             "Entendido. No insistiré ni te pediré datos ahora. Podemos dejarlo aquí; si cambias de idea, dime que quieres continuar."
             if previous != "decline"
-            else "Te escucho. Dejamos la simulación en pausa, sin consultar tu cuenta ni registrar pagos."
+            else "Te escucho. Dejamos la conversación en pausa, sin consultar tu cuenta ni registrar pagos."
         )
     elif intent == "willing":
         binding["onboarding_paused"] = False
@@ -121,15 +121,17 @@ def onboarding_reply(text, binding, ctx):
     elif intent == "complaint":
         response = "Lamento la frustración. Todavía no he consultado tu cuenta. Puedes decirme qué necesitas aclarar o pedir que terminemos."
     elif intent == "identity_help":
-        response = "Claro, puedo explicarte el paso de identificación ficticia sin consultar ninguna cuenta."
+        response = (
+            "Claro, puedo explicarte cómo verificar tu identidad antes de consultar la cuenta."
+        )
     elif intent == "scope":
-        response = "Soy un asistente automatizado para una simulación de cobranza. La identificación ficticia protege el acceso a la cuenta; puedo explicar el proceso sin consultar datos. Tú decides si continuar."
+        response = "Soy un asistente virtual de atención de cartera. La verificación de identidad protege el acceso a tu cuenta. Puedo aclarar tus dudas y tú decides si continuar."
     elif binding.get("onboarding_paused"):
-        response = "Seguimos en pausa. Puedo aclarar cómo funciona la simulación; no necesitas dar datos si no quieres continuar."
+        response = "Seguimos en pausa. Puedo aclarar tus dudas; no necesitas dar datos si no quieres continuar."
     elif not previous and intent == "greeting":
-        response = "Hola, soy el asistente automatizado de una fintech ficticia para una simulación de cobranza."
+        response = "Hola, soy el asistente virtual de atención de cartera."
     else:
-        response = "Podemos hablar de cómo funciona esta simulación de cobranza sin consultar ninguna cuenta. ¿Qué te gustaría saber?"
+        response = "Puedo aclarar tus dudas sobre la atención de cartera sin consultar ninguna cuenta. ¿Qué te gustaría saber?"
     if status == "model_error":
         response = "No pude interpretar tu mensaje por un error del servicio. No consulté tu cuenta ni registré cambios; puedes reintentar o escribir terminar."
     wording_status, attempts = "deterministic", 0
