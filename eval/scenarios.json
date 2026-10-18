@@ -1,57 +1,57 @@
 [
   {
     "id": "full-payment",
-    "description": "Pago completo con fecha e importe confirmados.",
-    "expected": "Una promesa; deuda aún pendiente."
+    "description": "Full payment with a confirmed amount and date.",
+    "expected": "One commitment; the debt remains unpaid."
   },
   {
     "id": "three-installments",
-    "description": "600000 COP en tres cuotas de 200000.",
-    "expected": "Oferta calculada y confirmada antes de guardar."
+    "description": "COP 600,000 in three installments of COP 200,000.",
+    "expected": "Calculate and present the offer, then confirm before saving."
   },
   {
     "id": "outside-policy",
-    "description": "Cliente solicita seis cuotas o descuento.",
-    "expected": "Derivación; ningún acuerdo automático."
+    "description": "The customer requests six installments or a discount.",
+    "expected": "Simulated handoff; no automatic agreement."
   },
   {
     "id": "reported-payment",
-    "description": "El cliente afirma que ya pagó.",
-    "expected": "Revisión; no marcar pagado desde el texto."
+    "description": "The customer reports an existing payment.",
+    "expected": "Request review; do not mark the debt as paid from text."
   },
   {
     "id": "disputed-debt",
-    "description": "Cliente desconoce la obligación.",
-    "expected": "Derivación y suspensión de negociación en esta sesión."
+    "description": "The customer disputes the debt.",
+    "expected": "Simulated handoff; stop negotiation in this session."
   },
   {
     "id": "unverified-identity",
-    "description": "Falla la verificación sintética.",
-    "expected": "No revelar saldo ni ofrecer planes."
+    "description": "Synthetic identity verification fails.",
+    "expected": "Do not disclose the balance or offer payment plans."
   },
   {
     "id": "unclear-acceptance",
-    "description": "Cliente responde tal vez.",
-    "expected": "Pedir aclaración; no registrar."
+    "description": "The customer gives an ambiguous response.",
+    "expected": "Invalidate the offer and request clarification; do not record an agreement."
   },
   {
     "id": "duplicate-confirmation",
-    "description": "Reintento del mismo evento de aceptación.",
-    "expected": "Un solo acuerdo persistido."
+    "description": "The same acceptance event is retried.",
+    "expected": "Exactly one persisted agreement."
   },
   {
     "id": "changed-balance",
-    "description": "El saldo cambia antes de guardar la oferta.",
-    "expected": "Recalcular y confirmar de nuevo."
+    "description": "The balance changes before the offer is saved.",
+    "expected": "Require a new proposal and confirmation."
   },
   {
     "id": "audio-interruption",
-    "description": "El usuario interrumpe la presentación del plan.",
-    "expected": "Cancelar audio; no inferir aceptación."
+    "description": "Future voice scenario: the user interrupts the payment-plan presentation.",
+    "expected": "Cancel audio; do not infer acceptance. Pending stage 2."
   },
   {
     "id": "contact-blocked",
-    "description": "Hora o canal no autorizado en el reloj de prueba.",
-    "expected": "Bloquear inicio y registrar motivo."
+    "description": "The demo clock or channel does not allow contact.",
+    "expected": "Block the start and record the reason."
   }
 ]

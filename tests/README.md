@@ -1,6 +1,28 @@
-# Pruebas locales
+# Offline tests
 
-Ejecutar `uv run pytest -q`. test_policy.py cubre términos y aritmética; test_contact.py, horarios,
-festivos y reglas de contacto; test_interpreter.py, interpretación conservadora; test_workflow.py,
-recorridos completos, reintentos, aislamiento, rollback y concurrencia de persistencia.
-Las pruebas de workflow bloquean red. La integración Anthropic no se prueba con llamadas reales.
+```bash
+uv run pytest -q
+```
+
+Coverage map, not runtime parallelism:
+
+```mermaid
+flowchart TD
+    T[Offline test suite] --> P[Payment policy and COP arithmetic]
+    T --> C[Contact calendar and authorization]
+    T --> I[Conservative intent extraction]
+    T --> W[Stateful workflow and SQLite]
+    T --> S[Studio public schema]
+    W --> R[Replay, recovery, isolation, concurrency, rollback]
+```
+
+| Module | Coverage |
+| --- | --- |
+| [test_policy.py](test_policy.py) | Terms, dates, and exact amounts |
+| [test_contact.py](test_contact.py) | Time windows, holidays, and contact rules |
+| [test_interpreter.py](test_interpreter.py) | Limited offline parsing and structured extraction contracts |
+| [test_workflow.py](test_workflow.py) | Conversation paths, storage, retries, and failure handling |
+| [test_studio_schema.py](test_studio_schema.py) | Public JSON inputs without repository objects |
+
+Workflow tests block network access. Live Anthropic calls and browser voice behavior are not covered.
+See [validation](../docs/VALIDATION.md) for runnable examples and remaining checks.
