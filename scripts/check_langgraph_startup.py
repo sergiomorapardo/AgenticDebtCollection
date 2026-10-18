@@ -168,6 +168,10 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
             }
             result = request(f"/threads/{thread}/runs/wait", payload)
             assert "__error__" not in result, result.get("__error__")
+            if "123456789" in text:
+                assert "No pude encontrar una cuenta" in result["reply"]["text"]
+            if text == "1111" and stage == "awaiting_customer":
+                assert "primero necesito tu número de identificación" in result["reply"]["text"]
             assert result["reply"]["stage"] == stage, f"Unexpected stage on turn {index}"
             assert result["messages"][-1]["type"] == "ai"
             assert result["messages"][-1]["content"] == result["reply"]["text"]
@@ -203,6 +207,9 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
     completed = conversation(
         [
             ("Hola", "awaiting_customer"),
+            ("123456789", "awaiting_customer"),
+            ("1111", "awaiting_customer"),
+            ("ya te lo pase, era 123456789", "awaiting_customer"),
             ("Mi cédula es 1000000001", "awaiting_identity"),
             ("verificar 1111", "ready"),
             ("quiero 3 cuotas desde 2026-10-20", "awaiting_confirmation"),
