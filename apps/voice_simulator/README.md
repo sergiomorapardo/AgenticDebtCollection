@@ -72,6 +72,7 @@ A saved commitment never marks a debt as paid.
 
 | Route | Purpose |
 | --- | --- |
+| `GET /api/trace` | Read bounded, sanitized graph execution events without blocking the current turn |
 | `GET /api/session` | Restore current call, transcript, playback state, and elapsed time |
 | `POST /api/start` | Begin an isolated conversation |
 | `POST /api/text` | Send a JSON `text` reply |
@@ -103,6 +104,27 @@ within this window avoids duplicate provider calls and business writes.
   saved response audio and business evidence remain on disk.
 - `.env` is local to each worktree. Git only distributes `.env.example`.
 
+## Optional technical viewer
+
+**Ver flujo técnico** opens a panel next to the call on wide screens, or below it on
+narrow screens. It starts hidden on every page load. Closing it, pressing Escape inside
+it, or using the same toggle returns to the call-only layout without interrupting audio.
+
+The graph topology comes from the compiled graph, including conditional edges. Node
+positions are presentation-only; new node names receive fallback positions. LangGraph
+`tasks` events supply actual node starts/completions/errors; the voice adapter records
+STT/TTS separately. Fast nodes may complete between refreshes, but their executed path
+and measured durations remain visible. Select a node or expand an event for updated
+state field names. The viewer does not expose raw inputs, state values, prompts,
+identification data, provider exceptions, or model reasoning.
+
+`GET /api/trace` reads an independent lock so a running business turn does not block it.
+The browser polls every 500 ms only while the panel is open, with one request in flight,
+a timeout, and cancellation when closed. Reading the viewer never invokes the agent or
+speech provider. The latest turn retains up to 200 events in memory; starting another
+turn clears the previous trace. Audio retries append speech events without rerunning nodes.
+This is execution visibility, not Studio debugging, checkpoint editing, or audio streaming.
+
 ## Boundaries
 
 This is a local demo API, not a production authentication boundary or telephone service.
@@ -113,16 +135,18 @@ and text needed for speech are sent to ElevenLabs. Use fictional data.
 
 ## Verification
 
-`uv run --extra voice pytest -q` passes 296 tests. Voice tests use fake speech and mock HTTP
+`uv run --extra voice pytest -q` passes 300 tests. Voice tests use fake speech and mock HTTP
 transport without paid calls. They cover provider request shape, redacted errors, automatic
 transcription/send, offer playback gating, retries without duplicate agreements, session/audio
-isolation, request replay, stale call IDs, origin/size checks, reload timing, and uncertain failures.
+isolation, request replay, stale call IDs, origin/size checks, reload timing, uncertain failures, and live trace reads during a blocked node. Trace tests
+also cover graph topology, redaction, session isolation, provider/node failures, and retries.
 Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
 
 Chrome verification with previously generated audio covers greeting/reply autoplay, enabling
 reply controls after playback, Enter-to-send, session reload, and hangup. The cached audio is
 a UI test double, not a validation of newly generated speech content. Responsive layout is
-checked at desktop and mobile widths. Physical microphone capture still needs manual acceptance.
+checked at desktop and mobile widths. The technical viewer is checked for its default
+hidden state, show/hide controls, execution highlighting, and expandable event details. Physical microphone capture still needs manual acceptance.
 
 Earlier live adapter validation confirmed TTS MP3 generation with the configured designed
 voice and Scribe v2 transcription of `Quiero tres cuotas desde mañana`. In the earlier UI,

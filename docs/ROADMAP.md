@@ -28,6 +28,10 @@ flowchart TD
 playback. Browser playback completion enables the next reply. Continuous listening and
 interruption-aware playback tracking remain planned.
 
+An optional technical panel, hidden by default, shows the compiled graph and current-turn
+node execution events, durations, errors, and updated field names. STT/TTS appear separately.
+It observes execution without editing checkpoints or exposing raw state values.
+
 ```mermaid
 flowchart LR
     M[Browser microphone] --> S[Speech to text]
