@@ -23,7 +23,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
             session.update(stage="handoff", pending_offer_id=None)
             return {
                 "session": session,
-                "response_text": "Ese calendario excedería tu capacidad mensual. Dejo una solicitud de revisión humana simulada; no registraré un acuerdo que no has aceptado.",
+                "response_text": "Ese calendario excedería tu capacidad mensual. Dejo una solicitud de revisión; no registraré un acuerdo que no has aceptado.",
             }
     if negotiation and count is None and amount and account.balance_cop % amount == 0:
         count = account.balance_cop // amount
@@ -33,13 +33,13 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
         }
     if count is None:
         return {
-            "response_text": "La política ficticia permite dos o tres cuotas mensuales, sin descuento ni cargos adicionales. ¿Cuál opción prefieres y en qué fecha harías el primer pago?"
+            "response_text": "Podemos revisar dos o tres cuotas mensuales, sin descuento ni cargos adicionales. ¿Cuál opción prefieres y en qué fecha harías el primer pago?"
         }
     if not 1 <= count <= policy.max_installments:
         session["stage"] = "handoff"
         return {
             "session": session,
-            "response_text": "La propuesta supera la política ficticia. Registro una solicitud de revisión humana simulada; no hay acuerdo automático.",
+            "response_text": "La propuesta está fuera de las condiciones que puedo aprobar. Registro una solicitud de revisión; no hay acuerdo automático.",
         }
     if (
         negotiation
@@ -49,7 +49,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
         session.update(stage="handoff", pending_offer_id=None)
         return {
             "session": session,
-            "response_text": "Ese plan superaría la capacidad mensual que nos indicaste. Dejo una solicitud de revisión humana simulada; no registraré un acuerdo.",
+            "response_text": "Ese plan superaría la capacidad mensual que nos indicaste. Dejo una solicitud de revisión; no registraré un acuerdo.",
         }
     if (
         amount is not None
@@ -76,7 +76,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
         session["draft_terms"].pop("payment_date", None)
         return {
             "session": session,
-            "response_text": "La fecha o el plan no cumplen la política ficticia. El primer pago debe ser entre hoy y siete días; indica una fecha válida.",
+            "response_text": "La fecha o el plan no cumplen las condiciones disponibles. El primer pago debe ser entre hoy y siete días; indica una fecha válida.",
         }
     if any(
         old["installments"] == offer.model_dump(mode="json")["installments"]
@@ -92,7 +92,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
         session["stage"] = "handoff"
         return {
             "session": session,
-            "response_text": "Para revisar otras condiciones, registro una solicitud de atención humana simulada.",
+            "response_text": "Para revisar otras condiciones, registro una solicitud de atención de un asesor.",
         }
     # El hash de términos es determinista; la referencia presentada pertenece a esta sesión.
     session["pending_offer_id"] = offer.offer_id
@@ -100,7 +100,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
     schedule = "; ".join(
         f"{item.amount_cop:,} COP el {item.due_date.isoformat()}" for item in offer.installments
     )
-    response = f"Propuesta ficticia: {schedule}. Total: {account.balance_cop:,} COP, sin descuentos ni cargos adicionales. ¿Confirmas este importe y estas fechas? Responde confirmo o propone cambios."
+    response = f"Propuesta: {schedule}. Total: {account.balance_cop:,} COP, sin descuentos ni cargos adicionales. ¿Confirmas este importe y estas fechas? Responde confirmo o propone cambios."
     return {
         "session": session,
         "draft_offer": offer.model_dump(mode="json"),
