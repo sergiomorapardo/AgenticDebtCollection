@@ -186,29 +186,6 @@ def test_new_session_has_no_access_to_previous_identity(session, tmp_path):
     assert "600,000" not in reply["text"]
 
 
-def test_gradio_app_constructs_without_network_or_speech_calls(session, tmp_path):
-    pytest.importorskip("gradio")
-    from collections_lab.channels.voice_app import create_app
-
-    app = create_app(session.speech, data_dir=tmp_path, now=session.context.now)
-    assert app.title == "Simulador de voz · Cobranza"
-    assert not session.speech.calls
-    handlers = {function.name: function.fn for function in app.fns.values()}
-    identifier, *view = handlers["start"](None)
-    assert len(session.speech.calls) == 1
-    audio_path = view[1]["value"]
-    assert not view[5]["visible"]  # Reply control waits for the response to finish.
-    completed = handlers["playback_finished"](identifier, audio_path)
-    assert completed[5]["visible"]
-    responded = handlers["respond"](identifier, "synthetic.wav")
-    assert session.speech.transcriptions == ["synthetic.wav"]
-    assert len(responded[0]) == 4
-    assert not responded[5]["visible"]
-    assert responded[1]["value"] != audio_path
-    stale = handlers["playback_finished"](identifier, audio_path)
-    assert all(update == {"__type__": "update"} for update in stale)
-
-
 def test_retry_and_stale_playback_do_not_unlock_new_offer_audio(session):
     offer(session)
     previous_audio = session.audio
@@ -244,3 +221,174 @@ def test_unknown_or_ambiguous_customer_ids_do_not_select_an_account(session, tex
     assert reply["stage"] == "awaiting_customer"
     assert "600,000" not in reply["text"]
     assert not session.context.repository.agreements()
+
+
+@pytest.fixture
+def voice_api(session, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from collections_lab.channels.voice_app import create_app
+
+    app = create_app(session.speech, data_dir=tmp_path / "api", now=session.context.now)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "HttpOnly" in response.headers["set-cookie"]
+        assert not session.speech.calls
+        yield client
+
+
+def api_post(client, action, *, state=None, payload=None, key=None, content=None):
+    from uuid import uuid4
+
+    headers = {
+        "X-Voice-Client": "1",
+        "X-Request-ID": key or uuid4().hex,
+        "X-Call-ID": state["session_id"] if state else "",
+    }
+    if content is not None:
+        return client.post(
+            "/api/" + action, content=content, headers={**headers, "Content-Type": "audio/webm"}
+        )
+    return client.post("/api/" + action, json=payload or {}, headers=headers)
+
+
+def finish_playback(client, state):
+    response = api_post(client, "playback", state=state, payload={"audio_id": state["audio_id"]})
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_voice_api_session_audio_isolation_and_request_replay(voice_api, session):
+    from fastapi.testclient import TestClient
+
+    key = "a" * 32
+    first = api_post(voice_api, "start", key=key)
+    assert first.status_code == 200
+    state = first.json()
+    assert len(session.speech.calls) == 1
+    assert api_post(voice_api, "start", key=key).json() == state
+    assert len(session.speech.calls) == 1
+    assert voice_api.get(state["audio_url"]).content == b"ID3-demo"
+    with TestClient(voice_api.app, base_url="http://127.0.0.1") as other:
+        assert other.get(state["audio_url"]).status_code == 401
+        other.get("/")
+        assert other.get("/api/session").json()["session_id"] is None
+        assert other.get(state["audio_url"]).status_code == 404
+    assert "test-secret" not in first.text
+    assert "/api/audio/" in state["audio_url"]
+    assert (
+        api_post(voice_api, "text", state=state, key=key, payload={"text": "Hola"}).status_code
+        == 409
+    )
+
+
+def test_voice_api_recording_is_one_turn_and_hangup_has_no_speech_cost(voice_api, session):
+    state = api_post(voice_api, "start").json()
+    assert api_post(voice_api, "recording", state=state, content=b"demo").status_code == 400
+    assert not session.speech.transcriptions
+    state = finish_playback(voice_api, state)
+    key = "b" * 32
+    response = api_post(voice_api, "recording", state=state, content=b"demo", key=key)
+    assert response.status_code == 200
+    assert len(response.json()["history"]) == 4
+    assert len(session.speech.transcriptions) == 1
+    assert (
+        api_post(voice_api, "recording", state=state, content=b"demo", key=key).json()
+        == response.json()
+    )
+    assert len(session.speech.transcriptions) == 1
+    assert (
+        api_post(voice_api, "recording", state=state, content=b"changed", key=key).status_code
+        == 409
+    )
+    count = len(session.speech.calls)
+    closed = api_post(voice_api, "end", state=response.json()).json()
+    assert closed["finished"] and closed["audio_id"] is None
+    assert len(session.speech.calls) == count
+    assert not list(session.directory.parent.rglob("input-*"))
+
+
+def test_voice_api_nine_digit_id_offer_and_stale_playback(voice_api):
+    state = api_post(voice_api, "start").json()
+    for text in ["Mi cédula es 123456789", "verificar 1111", "quiero 3 cuotas desde 2026-10-20"]:
+        state = finish_playback(voice_api, state)
+        response = api_post(voice_api, "text", state=state, payload={"text": text})
+        assert response.status_code == 200
+        state = response.json()
+    assert state["details"]["stage"] == "awaiting_confirmation"
+    assert api_post(voice_api, "text", state=state, payload={"text": "confirmo"}).status_code == 400
+    old_audio = state["audio_id"]
+    state = api_post(voice_api, "retry", state=state).json()
+    assert (
+        api_post(voice_api, "playback", state=state, payload={"audio_id": old_audio}).status_code
+        == 400
+    )
+    state = finish_playback(voice_api, state)
+    result = api_post(voice_api, "text", state=state, payload={"text": "confirmo"}).json()
+    assert result["finished"] and result["details"]["agreement_id"]
+    new_call = api_post(voice_api, "start").json()
+    assert new_call["session_id"] != result["session_id"]
+    assert api_post(voice_api, "end", state=result).status_code == 400
+
+
+def test_voice_api_rejects_cross_origin_invalid_and_oversized_requests(voice_api, session):
+    from uuid import uuid4
+
+    headers = {"X-Voice-Client": "1", "X-Request-ID": uuid4().hex}
+    assert voice_api.post("/api/start", json={}).status_code == 403
+    assert (
+        voice_api.post(
+            "/api/start", json={}, headers={**headers, "Origin": "https://other.example"}
+        ).status_code
+        == 403
+    )
+    assert (
+        voice_api.post(
+            "/api/start", json={}, headers={**headers, "Host": "other.example"}
+        ).status_code
+        == 400
+    )
+    assert voice_api.post("/api/start", content="[", headers=headers).status_code == 400
+    assert voice_api.post("/api/recording", content=b"x", headers=headers).status_code == 415
+    assert (
+        voice_api.post(
+            "/api/recording",
+            content=b"x" * (10 * 1024 * 1024 + 1),
+            headers={**headers, "Content-Type": "audio/webm"},
+        ).status_code
+        == 413
+    )
+    assert not session.speech.calls
+
+
+def test_voice_api_clock_survives_reload_and_stops_after_hangup(voice_api, monkeypatch):
+    import collections_lab.channels.voice_app as module
+
+    clock = [1000.0]
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    state = api_post(voice_api, "start").json()
+    clock[0] += 15
+    assert voice_api.get("/api/session").json()["elapsed_seconds"] == 15
+    closed = api_post(voice_api, "end", state=state).json()
+    clock[0] += 30
+    assert voice_api.get("/api/session").json()["elapsed_seconds"] == closed["elapsed_seconds"]
+
+
+def test_voice_api_caches_uncertain_failure_without_repeating_turn(voice_api, session, monkeypatch):
+    state = finish_playback(voice_api, api_post(voice_api, "start").json())
+    attempts = []
+
+    def fail(*args, **kwargs):
+        attempts.append(True)
+        raise RuntimeError("unexpected provider failure")
+
+    monkeypatch.setattr(session.speech, "synthesize", fail)
+    key = "c" * 32
+    response = api_post(voice_api, "text", state=state, payload={"text": "123456789"}, key=key)
+    assert response.status_code == 500
+    assert "unexpected provider" not in response.text
+    replay = api_post(voice_api, "text", state=state, payload={"text": "123456789"}, key=key)
+    assert replay.json() == response.json()
+    assert len(attempts) == 1
+    assert len(voice_api.get("/api/session").json()["history"]) == 4

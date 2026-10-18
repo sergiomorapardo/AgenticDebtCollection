@@ -1,10 +1,22 @@
-"""Local Gradio voice simulator with automatic transcription, sending, and playback."""
+"""Same-origin local voice API and standalone call interface."""
 
 import argparse
+import hashlib
+import json
 import os
+import re
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from threading import RLock
+from time import monotonic
 from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext
@@ -12,172 +24,221 @@ from collections_lab.channels.elevenlabs import ElevenLabsSpeech, SpeechError
 from collections_lab.channels.voice_session import VoiceSession
 from collections_lab.config.settings import load_settings
 
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+COOKIE = "voice_browser"
+AUDIO_TYPES = {"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a", "audio/wav": ".wav"}
+
+
+@dataclass
+class BrowserSession:
+    call: VoiceSession | None = None
+    touched: float = field(default_factory=monotonic)
+    started: float = 0
+    ended: float | None = None
+    lock: RLock = field(default_factory=RLock)
+    responses: OrderedDict = field(default_factory=OrderedDict)
+
 
 def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4-5-20251001", now):
-    import gradio as gr
+    app = FastAPI(
+        title="Simulador de voz · Cobranza", docs_url=None, redoc_url=None, openapi_url=None
+    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
+    browsers = {}
+    registry_lock = RLock()
 
-    sessions = {}
+    def browser(request):
+        with registry_lock:
+            entry = browsers.get(request.cookies.get(COOKIE))
+            if entry is None or monotonic() - entry.touched > 3600:
+                raise HTTPException(401, "La sesión expiró. Recarga la página para comenzar.")
+            entry.touched = monotonic()
+            return entry
 
-    def get_session(identifier):
-        if identifier not in sessions:
-            raise gr.Error("La sesión expiró. Recarga la página e inicia una conversación.")
-        return sessions[identifier]
+    def snapshot(entry):
+        call = entry.call
+        if call is None:
+            return {"session_id": None, "history": [], "finished": False, "ready": False}
+        audio_id = Path(call.audio).name if call.audio else None
+        return {
+            "session_id": call.thread_id,
+            "elapsed_seconds": max(0, (entry.ended or monotonic()) - entry.started),
+            "history": list(call.history),
+            "finished": call.reply["finished"],
+            "ready": not call.reply["finished"]
+            and (
+                call.played_audio == call.audio
+                if call.audio
+                else call.reply["stage"] != "awaiting_confirmation"
+            ),
+            "audio_id": audio_id,
+            "audio_url": f"/api/audio/{audio_id}" if audio_id else None,
+            "warning": call.warning,
+            "details": call.details(),
+            "provider": provider,
+        }
 
-    def ready(session):
-        if session.reply["finished"]:
-            return False
-        if session.audio:
-            return session.played_audio == session.audio
-        return session.reply["stage"] != "awaiting_confirmation"
-
-    def render(session, *, replace_audio=True, error=None):
-        finished = session.reply["finished"]
-        can_respond = ready(session)
-        message = (
-            error
-            or session.warning
-            or (
-                "Conversación terminada. Puedes iniciar otra."
-                if finished
-                else "Tu turno: graba tu respuesta y detén la grabación para enviarla."
-                if can_respond
-                else "Escucha al agente. Si no suena automáticamente, pulsa reproducir."
-            )
+    @app.middleware("http")
+    async def local_boundary(request, call_next):
+        if request.method == "POST":
+            origin = request.headers.get("origin")
+            if (origin and origin != str(request.base_url).rstrip("/")) or (
+                request.headers.get("x-voice-client") != "1"
+            ):
+                return JSONResponse(
+                    {"detail": "Solicitud de otro origen rechazada."}, status_code=403
+                )
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'"
         )
-        return (
-            list(session.history),
-            gr.update(value=session.audio, visible=True) if replace_audio else gr.skip(),
-            session.details(),
-            message,
-            gr.update(visible=finished, value="Iniciar otra conversación"),
-            gr.update(value=None, visible=can_respond, interactive=True),
-            gr.update(interactive=not finished),
-            gr.update(value="", interactive=can_respond),
-            gr.update(value=None, interactive=can_respond),
+        return response
+
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request):
+        with registry_lock:
+            for key, value in list(browsers.items()):
+                if monotonic() - value.touched > 3600:
+                    del browsers[key]
+            key = request.cookies.get(COOKIE)
+            if key not in browsers:
+                if len(browsers) >= 64:
+                    raise HTTPException(429, "Demasiadas sesiones locales. Intenta más tarde.")
+                key = uuid4().hex
+                browsers[key] = BrowserSession()
+        response = HTMLResponse(Path(__file__).with_name("voice.html").read_text())
+        response.set_cookie(COOKIE, key, httponly=True, samesite="strict", max_age=3600)
+        return response
+
+    @app.get("/api/session")
+    def current(request: Request):
+        entry = browser(request)
+        with entry.lock:
+            return snapshot(entry)
+
+    @app.get("/api/audio/{audio_id}")
+    def audio(audio_id: str, request: Request):
+        entry = browser(request)
+        with entry.lock:
+            call = entry.call
+            if not call or not call.audio or Path(call.audio).name != audio_id:
+                raise HTTPException(404, "Audio no disponible para esta sesión.")
+            return FileResponse(call.audio, media_type="audio/mpeg")
+
+    def perform(entry, action, raw, request_id, call_id, content_type):
+        digest = hashlib.sha256(action.encode() + call_id.encode() + raw).hexdigest()
+        with entry.lock:
+            if request_id in entry.responses:
+                previous_digest, result, status = entry.responses[request_id]
+                if previous_digest != digest:
+                    return JSONResponse({"detail": "Identificador de solicitud reutilizado."}, 409)
+                return JSONResponse(result, status)
+            status = 200
+            try:
+                payload = {} if action == "recording" else json.loads(raw or b"{}")
+                if not isinstance(payload, dict):
+                    raise TypeError("Mensaje inválido.")
+                call = entry.call
+                if action == "start":
+                    if call and not call.reply["finished"]:
+                        raise ValueError("Ya hay una llamada activa.")
+                    directory = Path(data_dir) / uuid4().hex
+                    context = AppContext(
+                        SQLiteRepository(directory / "conversation.sqlite3"), now, provider, model
+                    )
+                    call = VoiceSession(context, speech, directory)
+                    entry.started, entry.ended = monotonic(), None
+                    call.send("Hola")
+                    entry.call = call
+                else:
+                    if call is None or call.thread_id != call_id:
+                        raise ValueError("La llamada cambió. Recarga la página.")
+                    if action in {"text", "recording"} and not snapshot(entry)["ready"]:
+                        raise ValueError("Espera a que termine el mensaje del agente.")
+                    if action == "text":
+                        text = payload.get("text")
+                        if not isinstance(text, str):
+                            raise ValueError("Escribe una respuesta.")
+                        call.send(text)
+                    elif action == "recording":
+                        path = call.directory / ("input-" + uuid4().hex + AUDIO_TYPES[content_type])
+                        try:
+                            path.write_bytes(raw)
+                            call.respond_to_audio(path)
+                        finally:
+                            path.unlink(missing_ok=True)
+                    elif action == "playback":
+                        audio_id = payload.get("audio_id")
+                        if not isinstance(audio_id, str) or audio_id != snapshot(entry)["audio_id"]:
+                            raise ValueError("Ese audio ya no corresponde a la respuesta actual.")
+                        call.acknowledge_playback(audio_id)
+                    elif action == "retry":
+                        call.retry_audio()
+                    elif action == "end" and not call.reply["finished"]:
+                        call.send("terminar", speak=False)
+                if entry.call and entry.call.reply["finished"] and entry.ended is None:
+                    entry.ended = monotonic()
+                result = snapshot(entry)
+            except (TypeError, ValueError, SpeechError) as error:
+                result, status = {"detail": str(error), "state": snapshot(entry)}, 400
+            except Exception:  # noqa: BLE001 - cache uncertain outcomes at the API boundary
+                # Cache an uncertain failure too: replaying must never repeat business writes.
+                result, status = (
+                    {
+                        "detail": "No se pudo completar el turno. Revisa el estado de la llamada.",
+                        "state": snapshot(entry),
+                    },
+                    500,
+                )
+            entry.responses[request_id] = (digest, result, status)
+            if len(entry.responses) > 128:
+                entry.responses.popitem(last=False)
+            return JSONResponse(result, status)
+
+    @app.post("/api/{action}")
+    async def mutate(action: str, request: Request):
+        if action not in {"start", "text", "recording", "playback", "retry", "end"}:
+            raise HTTPException(404, "Acción desconocida.")
+        entry = browser(request)
+        request_id = request.headers.get("x-request-id", "")
+        if not re.fullmatch(r"[a-f0-9-]{32,36}", request_id):
+            raise HTTPException(400, "Falta el identificador de solicitud.")
+        content_type = request.headers.get("content-type", "").split(";")[0]
+        if action == "recording" and content_type not in AUDIO_TYPES:
+            raise HTTPException(415, "Formato de audio no compatible.")
+        limit = MAX_AUDIO_BYTES if action == "recording" else 20000
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > limit:
+                raise HTTPException(
+                    413,
+                    "La grabación supera el límite de 10 MB."
+                    if action == "recording"
+                    else "Mensaje demasiado largo.",
+                )
+            raw.extend(chunk)
+        if action == "recording" and not raw:
+            raise HTTPException(400, "No se recibió audio.")
+        return await run_in_threadpool(
+            perform,
+            entry,
+            action,
+            bytes(raw),
+            request_id,
+            request.headers.get("x-call-id", ""),
+            content_type,
         )
 
-    def start(identifier):
-        if identifier in sessions and not sessions[identifier].reply["finished"]:
-            raise gr.Error("Termina la conversación actual antes de iniciar otra.")
-        identifier = uuid4().hex
-        directory = data_dir / identifier
-        context = AppContext(
-            SQLiteRepository(directory / "conversation.sqlite3"), now, provider, model
-        )
-        session = VoiceSession(context, speech, directory)
-        session.send("Hola")
-        sessions[identifier] = session
-        return (identifier, *render(session))
-
-    def respond(identifier, recording):
-        session = get_session(identifier)
-        try:
-            if not recording:
-                raise ValueError("No se recibió audio. Graba de nuevo o escribe en Opciones.")
-            session.respond_to_audio(recording)
-        except (SpeechError, ValueError) as error:
-            return render(session, replace_audio=False, error=str(error))
-        return render(session)
-
-    def send(identifier, text):
-        session = get_session(identifier)
-        try:
-            session.send(text)
-        except ValueError as error:
-            raise gr.Error(str(error)) from None
-        return render(session)
-
-    def playback_finished(identifier, audio_path):
-        session = get_session(identifier)
-        if not session.acknowledge_playback(audio_path):
-            return tuple(gr.skip() for _ in outputs)
-        return render(session, replace_audio=False)
-
-    def end(identifier):
-        session = get_session(identifier)
-        session.send("terminar")
-        return render(session)
-
-    def retry(identifier):
-        session = get_session(identifier)
-        session.retry_audio()
-        return render(session)
-
-    with gr.Blocks(title="Simulador de voz · Cobranza", analytics_enabled=False) as app:
-        identifier = gr.State(
-            None, time_to_live=3600, delete_callback=lambda key: sessions.pop(key, None)
-        )
-        gr.Markdown(
-            "# Hablemos\n"
-            "Escucha al agente y graba tu respuesta. Al detener la grabación, se envía sola.\n\n"
-            "Demo con datos ficticios. El audio se envía a ElevenLabs y consume créditos."
-        )
-        start_button = gr.Button("Iniciar conversación", variant="primary")
-        status = gr.Markdown("Inicia la conversación para escuchar el saludo del agente.")
-        audio = gr.Audio(
-            label="Agente",
-            autoplay=True,
-            interactive=False,
-            type="filepath",
-            visible=False,
-            buttons=[],
-        )
-        recording = gr.Audio(
-            sources=["microphone"],
-            type="filepath",
-            label="Responder",
-            visible=False,
-            interactive=True,
-            editable=False,
-            buttons=[],
-        )
-        history = gr.Chatbot(label="Conversación", height=300, buttons=[])
-        with gr.Accordion("Opciones · escribir, cargar audio o terminar", open=False):
-            text = gr.Textbox(
-                label="Responder por escrito",
-                placeholder="Escribe y pulsa Enter",
-                interactive=False,
-            )
-            upload = gr.Audio(
-                sources=["upload"],
-                type="filepath",
-                label="Cargar y enviar audio",
-                interactive=False,
-                editable=False,
-                buttons=[],
-            )
-            with gr.Row():
-                retry_button = gr.Button("Reintentar audio del agente")
-                end_button = gr.Button("Terminar conversación", interactive=False)
-            gr.Markdown(
-                "Datos de prueba: cédula `1000000001`, código `1111`. "
-                "Puedes pedir `quiero 3 cuotas desde 2026-10-20` y luego `confirmo`.\n\n"
-                f"Conversación: `{provider}` · Reloj de demo: `{now.isoformat()}`"
-            )
-            details = gr.JSON(label="Estado y latencia")
-        outputs = [
-            history,
-            audio,
-            details,
-            status,
-            start_button,
-            recording,
-            end_button,
-            text,
-            upload,
-        ]
-        events = {"api_visibility": "private", "concurrency_id": "voice", "concurrency_limit": 1}
-        start_button.click(start, [identifier], [identifier, *outputs], **events)
-        recording.stop_recording(respond, [identifier, recording], outputs, **events)
-        upload.upload(respond, [identifier, upload], outputs, **events)
-        text.submit(send, [identifier, text], outputs, **events)
-        audio.stop(playback_finished, [identifier, audio], outputs, **events)
-        end_button.click(end, [identifier], outputs, **events)
-        retry_button.click(retry, [identifier], outputs, **events)
     return app
 
 
 def main():
+    import uvicorn
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--data-dir", type=Path, default=Path(".local/voice"))
@@ -194,9 +255,7 @@ def main():
         model=settings.anthropic_model,
         now=datetime.fromisoformat(settings.demo_now),
     )
-    app.queue().launch(
-        server_name="127.0.0.1", server_port=args.port, share=False, max_file_size="10mb"
-    )
+    uvicorn.run(app, host="127.0.0.1", port=args.port)
 
 
 if __name__ == "__main__":

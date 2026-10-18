@@ -70,7 +70,7 @@ class VoiceSession:
         ):
             raise ValueError(
                 "Espera a que termine la oferta antes de responder. "
-                "Si no suena, pulsa reproducir; si falló, reintenta el audio en Opciones."
+                "Si no suena, pulsa Escuchar mensaje; si falló, pulsa Reintentar audio."
             )
 
     def respond_to_audio(self, path):
@@ -78,7 +78,7 @@ class VoiceSession:
             self.check_turn()  # Do not spend transcription credits on a blocked turn.
             return self.send(self.transcribe(path))
 
-    def send(self, text: str):
+    def send(self, text: str, *, speak=True):
         with self._lock:
             text = text.strip()
             if not text or len(text) > 4000:
@@ -100,7 +100,11 @@ class VoiceSession:
                 ]
             )
             # Persist the turn before synthesis. An audio retry never replays the graph.
-            self.retry_audio()
+            if speak:
+                self.retry_audio()
+            else:
+                self.audio = self.played_audio = None
+                self.warning = ""
             return self.reply
 
     def retry_audio(self):

@@ -17,7 +17,8 @@ collections-voice = "collections_lab.channels.voice_app:main"
 
 [project.optional-dependencies]
 voice = [
-    "gradio>=6,<7",
+    "fastapi>=0.141,<1",
+    "uvicorn>=0.54,<1",
     "httpx>=0.28,<1",
 ]
 
