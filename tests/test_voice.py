@@ -109,17 +109,20 @@ def session(tmp_path, monkeypatch):
     return VoiceSession(context, FakeSpeech(), tmp_path / "audio")
 
 
-def offer(session):
+def offer(session, customer="1000000001"):
     session.send("Hola")
-    session.send("Mi cédula es 1000000001")
+    identified = session.send(f"Mi cédula es {customer}")
+    assert identified["stage"] == "awaiting_identity"
+    assert "600,000" not in identified["text"]
     session.send("verificar 1111")
     reply = session.send("quiero 3 cuotas desde 2026-10-20")
     assert reply["stage"] == "awaiting_confirmation"
     return reply
 
 
-def test_confirmation_requires_acknowledgement_for_current_offer(session):
-    proposal = offer(session)
+@pytest.mark.parametrize("customer", ["1000000001", "123456789"])
+def test_confirmation_requires_acknowledgement_for_current_offer(session, customer):
+    proposal = offer(session, customer)
     assert session.transcribe("synthetic.wav") == "confirmo"
     assert not session.context.repository.agreements()  # STT never runs the graph.
     with pytest.raises(ValueError, match="Espera a que termine"):
@@ -233,3 +236,11 @@ def test_transcription_failure_never_advances_the_business_turn(session, monkeyp
         session.respond_to_audio("empty.wav")
     assert session.history == history
     assert len(session.speech.calls) == 1
+
+
+@pytest.mark.parametrize("text", ["91234567890", "1234567890", "123456789 y 1000000002"])
+def test_unknown_or_ambiguous_customer_ids_do_not_select_an_account(session, text):
+    reply = session.send(text)
+    assert reply["stage"] == "awaiting_customer"
+    assert "600,000" not in reply["text"]
+    assert not session.context.repository.agreements()

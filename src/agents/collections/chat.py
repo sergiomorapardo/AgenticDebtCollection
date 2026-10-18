@@ -118,7 +118,7 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
 def identify_customer(state: ChatState, runtime: Runtime):
     memory = ChatMemory(resolve_context(runtime).repository)
     customers = json.loads((data_directory() / "fixtures/customers.json").read_text())
-    candidates = re.findall(r"(?<!\d)\d{10}(?!\d)", state["text"])
+    candidates = re.findall(r"(?<!\d)\d{9,10}(?!\d)", state["text"])
     account = customers.get(candidates[0]) if len(candidates) == 1 else None
     if account is None:
         if candidates:
