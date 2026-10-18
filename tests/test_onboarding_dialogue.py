@@ -72,6 +72,7 @@ def test_paused_onboarding_persists_without_checkpoint_and_replays(chat):
     send, ctx = chat
     result = send("no quiero hacer nada", "decline")
     assert send("no quiero hacer nada", "decline")["reply"] == result["reply"]
+    assert len(ChatMemory(ctx.repository).binding("onboarding")["onboarding_history"]) == 1
     graph = build_graph(studio=True)
     result = graph.invoke(
         {"messages": [HumanMessage(content="hola", id="later")]},
