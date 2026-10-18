@@ -13,4 +13,5 @@ Describe the concrete problem and resulting behavior of this change.
 
 State the checks run, review outcome, and limits of the current stage.
 
-Use squash merge only. Preserve the source branch to retain its original commit history.
+Use squash merge only. GitHub automatically deletes the remote source branch after merge;
+the pull request retains the original commit history.
