@@ -16,7 +16,10 @@
 - Split work into sequential, coherent groups. Complete and review each pull request before starting the next dependent group.
 - Group each commit by responsibility. Prefer multiple meaningful commits in a pull request; never combine unrelated groups merely to create a single commit.
 - Keep automatic deletion of remote source branches enabled after pull requests are merged. Do not recreate a merged branch merely to preserve its name; use the pull request to inspect its original commits.
-- Automatic remote cleanup does not authorize deleting local branches or worktrees, or retroactively deleting older remote branches. Preserve those unless separately requested.
+- After each squash merge, automatically remove eligible merged local branches and their worktrees, including older merged branches. Keep the primary checkout and any open, closed-without-merge, dirty, locked, active, or divergent worktree.
+- Use `python3 scripts/merge_pr.py <PR-number>` from the primary checkout to merge, fast-forward main, and run cleanup automatically. For a merge performed on GitHub, finalize locally with the same command; GitHub cannot remove directories on this computer.
+- Cleanup must verify merged PR evidence against current main, including tree equality for squash/rebased branches. Preserve branch history in a Git bundle and non-rebuildable ignored data in restricted local backups under `.validation/worktree-cleanup/` before removal. Never print credentials or commit these backups.
+- `python3 scripts/cleanup_merged.py` audits without deleting; `--apply` performs the authorized cleanup. Preserve unmerged work and report any skipped branches instead of forcing removal.
 - Review each finished pull request and run checks appropriate to its stage before proceeding. State any validation that requires a later integration layer.
 
 - Use Conventional Commits for every commit: `<type>(<optional-scope>): <description>`.
