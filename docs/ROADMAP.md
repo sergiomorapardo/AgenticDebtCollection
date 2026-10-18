@@ -41,5 +41,14 @@ audio is generated, before sending the next turn. An acknowledgement is recorded
 the response and audio; it is not automatic proof of playback or audibility.
 Automatic interruption-aware playback tracking remains a later iteration.
 
+### TODO: streaming voice
+
+- [ ] Stream response audio only after the complete response text passes the existing
+  business checks; preserve the exact approved amounts and dates.
+- [ ] Validate the streaming endpoint with the configured voice and Free account,
+  recording credits before and after the test, latency, and playback completion.
+- [ ] Add realtime transcription, interruption handling, and reliable full-offer
+  playback tracking in a later iteration. Keep manual turns as the current baseline.
+
 No AWS resources or real telephone calls are included.
 See [voice simulation](../apps/voice_simulator/README.md) and [deployment](../infra/README.md).
