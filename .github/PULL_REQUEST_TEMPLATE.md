@@ -1,16 +1,16 @@
-## Comportamiento
+## Behavior
 
-Describir el problema y el resultado concreto de esta capa.
+Describe the concrete problem and resulting behavior of this change.
 
-## Alcance y secuencia
+## Scope and sequence
 
-- Base y dependencia:
-- Archivos modificados (máximo 12):
-- Grupos de commits:
-- Siguiente capa, si aplica:
+- Base branch and dependency:
+- Changed files (maximum 12):
+- Commit groups:
+- Next group, if applicable:
 
-## Validación y revisión
+## Validation and review
 
-Indicar pruebas ejecutadas, resultado de la revisión y limitaciones de esta etapa.
+State the checks run, review outcome, and limits of the current stage.
 
-Integrar exclusivamente con squash merge. Conservar la rama para consultar los commits originales.
+Use squash merge only. Preserve the source branch to retain its original commit history.

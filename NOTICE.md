@@ -1,8 +1,17 @@
-# Referencia de estructura
+# References
 
-Organización basada en el agente de abastecimiento de Sergio Mora en:
-https://github.com/sergiomorapardo/alianzateam-claude-data-teams/tree/5d37d6e/src/agents/abastecimiento
+The module, node, and route layout was adapted from Sergio Mora's
+[Alianza Team procurement agent](https://github.com/sergiomorapardo/alianzateam-claude-data-teams/tree/5d37d6e/src/agents/abastecimiento).
+The original structural reference was a clean `main` checkout at `5d37d6e`.
+The first commit contained only the initial `AGENTS.md`, copied from AdvancedGenAI.
 
-Checkout consultado en main, limpio, commit 5d37d6e. Se toma el patrón de módulos, nodos y rutas;
-no se copian credenciales, materiales del curso, datasets ni memoria de abastecimiento.
-El código y los fixtures de cobranza de esta estructura se crearon para este proyecto.
+The visual documentation adapts teaching patterns from these repositories:
+
+| Reference | Pattern adapted here |
+| --- | --- |
+| Alianza Team: `S01_Pedidos_LangChain.ipynb`, `S03_Inventario_Tools.ipynb` | Short interaction sequences and explicit tool boundaries |
+| Alianza Team: `S04_Documentos_RAG.ipynb` | Color distinction between local processing and paid APIs |
+| AdvancedGenAI: `L4-RAGHistoryChat.ipynb`, `L10-chaining.ipynb` | Decision flows, persistent state, and graphs grounded in the implementation |
+
+The collection code, synthetic fixtures, and diagrams were created for this project.
+No credentials, customer data, course datasets, or procurement memory were copied.
