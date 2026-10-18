@@ -62,10 +62,10 @@ usa otro archivo explícito, por ejemplo `--database .local/otro-escenario.sqlit
 ## Turnos reproducibles
 
 ```bash
-uv run collections-lab turn --session ejemplo --event-id 1 --text ''
-uv run collections-lab turn --session ejemplo --event-id 2 --text 'verificar 1111'
-uv run collections-lab turn --session ejemplo --event-id 3 --text 'pago 600000 mañana'
-uv run collections-lab turn --session ejemplo --event-id 4 --text 'confirmo'
+uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 1 --text ''
+uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 2 --text 'verificar 1111'
+uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 3 --text 'pago 600000 mañana'
+uv run collections-lab turn --database .local/turnos.sqlite3 --session ejemplo --event-id 4 --text 'confirmo'
 ```
 
 El mismo event_id con igual contenido devuelve el resultado guardado; con otro contenido falla.
@@ -95,7 +95,7 @@ Studio es una herramienta de desarrollo, no una interfaz pública de clientes.
 Configura tu propia ANTHROPIC_API_KEY en el .env local y ejecuta:
 
 ```bash
-uv run collections-lab chat --session haiku-001 --provider anthropic
+uv run collections-lab chat --database .local/haiku.sqlite3 --session haiku-001 --provider anthropic
 ```
 
 Esto consume tokens. Modelo por defecto: `claude-haiku-4-5-20251001`. No se copian claves de otros
