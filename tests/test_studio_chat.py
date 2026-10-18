@@ -381,3 +381,85 @@ def test_recall_preserves_commitments_from_earlier_sessions(chat, latest_stage):
     assert ctx.repository.get_session("newer") == newer
     assert len(ctx.repository.agreements()) == 1
     assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+@pytest.mark.parametrize(
+    "text", ["123456789", "ya te lo pase, era 123456789", "123", "10000000010"]
+)
+def test_unknown_identification_is_acknowledged_without_model_or_account_access(
+    chat, monkeypatch, text
+):
+    from agents.collections import chat as chat_module
+
+    send, ctx, _ = chat
+
+    def no_onboarding(*args):
+        raise AssertionError("Submitted identification must not be sent to the onboarding model")
+
+    monkeypatch.setattr(chat_module, "onboarding_reply", no_onboarding)
+    result = send(text, "unknown")
+    assert "No pude encontrar una cuenta" in result["reply"]["text"]
+    assert result["reply"]["stage"] == "awaiting_customer"
+    binding = ChatMemory(ctx.repository).binding("first")
+    assert binding["account_id"] is None and not binding["verified"]
+    assert binding["attempts"] == 0
+    assert not ctx.repository.contacts_for("demo-001")
+    assert not ctx.repository.agreements()
+
+
+def test_screenshot_unknown_id_then_code_then_correction(chat):
+    send, ctx, _ = chat
+    unknown = send("123456789", "unknown")
+    assert "No pude encontrar una cuenta" in unknown["reply"]["text"]
+    code = send("1111", "premature-code")
+    assert "primero necesito tu número de identificación" in code["reply"]["text"]
+    repeated = send("ya te lo pase, era 123456789", "repeated")
+    assert "No pude encontrar una cuenta" in repeated["reply"]["text"]
+    assert all("600,000" not in r["reply"]["text"] for r in (unknown, code, repeated))
+    assert ChatMemory(ctx.repository).binding("first")["attempts"] == 0
+    assert (
+        send("mi identificación es 1000000001", "corrected")["reply"]["stage"]
+        == "awaiting_identity"
+    )
+    assert send("1111", "verify")["reply"]["stage"] == "ready"
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+def test_multiple_numbers_require_disambiguation_before_identity_binding(chat):
+    send, ctx, _ = chat
+    result = send("1000000001 o 123456789", "multiple")
+    assert "Veo varios números" in result["reply"]["text"]
+    assert ChatMemory(ctx.repository).binding("first")["account_id"] is None
+    assert not ctx.repository.contacts_for("demo-001")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "quiero pagar 123 pesos",
+        "puedo pagar 123456789 COP",
+        "quiero 2 cuotas",
+        "la fecha es 2026-10-20",
+        "tengo 2 preguntas",
+        "2026-10-20",
+    ],
+)
+def test_payment_numbers_are_not_treated_as_identification(chat, monkeypatch, text):
+    from agents.collections import chat as chat_module
+
+    send, ctx, _ = chat
+    calls = []
+
+    def onboarding(text, binding, context):
+        calls.append(text)
+        return binding, {
+            "text": "Para consultar tu cuenta, necesito tu identificación.",
+            "stage": "awaiting_customer",
+            "finished": False,
+        }
+
+    monkeypatch.setattr(chat_module, "onboarding_reply", onboarding)
+    result = send(text, "payment")
+    assert calls == [text]
+    assert "No pude encontrar" not in result["reply"]["text"]
+    assert ChatMemory(ctx.repository).binding("first")["account_id"] is None

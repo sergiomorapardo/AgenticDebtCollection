@@ -240,3 +240,6 @@ real transfer. The legacy false-closure signature remains unchanged for historic
 | --- | --- | --- | --- |
 | UX-03 | Verify a returning customer or ask `¿Qué acordamos?` | Keep transcript excerpts/internal summaries out of chat; show authoritative account facts and next step; preserve terminal outcomes and replay | `test_verified_recall_keeps_transcripts_internal_and_preserves_outcomes` |
 | UX-04 | Historical false closure followed by complaint | Acknowledge poor service without technical recovery narration; require explicit continuation; preserve history and create no agreement | Same parametrized test, `legacy` case |
+
+| UX-05 | `123456789` → `1111` → `ya te lo pase, era 123456789` | Acknowledge missing account; explain premature code; accept corrected fixture ID without consuming verification attempts | `test_screenshot_unknown_id_then_code_then_correction`; Agent Server CI smoke |
+| UX-06 | Multiple numbers or unknown ID of another length | Ask for one ID or report no account; never guess, truncate, bind identity, or call onboarding model | Studio identification regression tests |

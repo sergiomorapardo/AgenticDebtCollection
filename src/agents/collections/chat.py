@@ -13,7 +13,7 @@ from typing_extensions import TypedDict
 
 from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
-from agents.collections.conversation import requests_end
+from agents.collections.conversation import normalize_text, requests_end
 from agents.collections.nodes.intake.tools import verify_demo_code
 from agents.collections.onboarding import onboarding_reply
 from agents.collections.runtime import resolve_context
@@ -118,14 +118,38 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
 def identify_customer(state: ChatState, runtime: Runtime):
     memory = ChatMemory(resolve_context(runtime).repository)
     customers = json.loads((data_directory() / "fixtures/customers.json").read_text())
-    candidates = re.findall(r"(?<!\d)\d{10}(?!\d)", state["text"])
+    normalized = normalize_text(state["text"])
+    # Intercept apparent identity/code submissions, not incidental amounts or dates.
+    numeric_submission = re.fullmatch(r"[0-9]+(?:\s*(?:[,;]|o|y)\s*[0-9]+)*", normalized)
+    identity_submission = re.search(
+        r"\b(cedula|identificacion|documento|codigo|verificar)\b|"
+        r"\bmi numero\b|\bya te (?:lo )?(?:pase|di|envie|comparti)\b|"
+        r"^(?:es|era) [0-9]+$",
+        normalized,
+    )
+    candidates = (
+        re.findall(r"(?<!\w)[0-9]+(?!\w)", state["text"])
+        if numeric_submission or identity_submission
+        else []
+    )
     account = customers.get(candidates[0]) if len(candidates) == 1 else None
     if account is None:
         if candidates:
-            response = reply(
-                "No pude encontrar una cuenta con esa identificación. Revisa el número o dime si prefieres terminar."
-            )
-            return {"chat_reply": response}
+            if len(candidates) > 1:
+                text = (
+                    "Veo varios números. ¿Cuál es tu número de identificación? Compárteme solo uno."
+                )
+            elif len(candidates[0]) == 4:
+                text = (
+                    "Aún no he encontrado tu cuenta. Si ese número es el código de verificación, "
+                    "primero necesito tu número de identificación."
+                )
+            else:
+                text = (
+                    "No pude encontrar una cuenta con esa identificación. "
+                    "Revisa el número o dime si prefieres terminar."
+                )
+            return {"chat_reply": reply(text)}
         return respond_onboarding(state, runtime)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
