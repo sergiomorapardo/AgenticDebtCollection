@@ -109,3 +109,30 @@ closing message immediately after a recognized off-topic Python request, with no
 no recorded legitimate close reason, and no later refusal/stop. Only `continuemos`, `retomemos`,
 `quiero continuar`, or `quiero retomar` restores that same session. History and contacts remain;
 no offer or agreement is accepted by recovery. Legitimate closures never reopen this way.
+
+
+## Conversation before verification
+
+```mermaid
+flowchart TD
+    U[Unverified human message] --> S{Explicit stop?}
+    S -->|Yes| E[Close this thread without account access]
+    S -->|No| I{Demo ID or verification code?}
+    I -->|Yes| V[Validate identity with backend rules]
+    I -->|No| C[Classify current intent with Haiku or offline mock]
+    C --> D{Intent}
+    D -->|Decline| P[Pause; stop requesting data]
+    D -->|Willing to continue| R[Explain the pending identity step]
+    D -->|Complaint or question| A[Acknowledge or explain scope]
+    P --> N[Next human message]
+    R --> N
+    A --> N
+    N --> U
+    V -->|Verified| H[Access account history and negotiate]
+```
+
+Pause is stored per thread and survives restarts; only explicit stop closes onboarding.
+Ordinary conversation never consumes verification attempts. Haiku classifies the current
+message with numbers redacted; it receives no account history and cannot verify identity,
+register a payment, or accept an agreement. Responses preserve the simulation boundary.
+Provider failures are visible as `interpretation_status=model_error` and allow retry.
