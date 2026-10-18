@@ -82,14 +82,9 @@ def terminal_response(session, text):
     if recoverable_misclosure(session):
         if requests_end(text):
             return "Entendido. Mantengo cerrada esta conversación; no retomaré la negociación."
-        prefix = (
-            "Lamento la mala experiencia."
-            if social_intent(text) == "complaint"
-            else "El cambio de tema cerró esta sesión por error."
-        )
         return (
-            prefix
-            + " Puedo retomar la conversación conservando el historial. Escribe continuemos si quieres seguir; no registraré ningún acuerdo por retomarla."
+            "Lamento la atención anterior. Puedo ayudarte a revisar las opciones de pago. "
+            "Si quieres seguir, dime continuemos."
         )
     prefix = "Lamento la mala experiencia. " if social_intent(text) == "complaint" else ""
     if not session.get("identity_verified"):

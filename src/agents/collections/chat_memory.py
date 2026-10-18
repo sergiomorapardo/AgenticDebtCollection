@@ -124,3 +124,37 @@ def summarize_history(history):
             f"- Compromiso {agreement['agreement_id']}: {terms}. Promesa registrada; pago no verificado."
         )
     return "\n".join(lines)
+
+
+def customer_history_reply(history, repository):
+    """Expose authoritative account facts, never internal summaries or transcript excerpts."""
+    from agents.collections.conversation import terminal_response
+
+    session = history["sessions"][0]
+    commitments = []
+    for agreement in history["agreements"]:
+        terms = "; ".join(
+            f"{p['amount_cop']:,} COP el {p['due_date']}"
+            for p in agreement["offer"]["installments"]
+        )
+        commitments.append(
+            f"Compromiso registrado con referencia {agreement['agreement_id']}: {terms}. "
+            "Es una promesa de pago; pago no verificado. El saldo continúa pendiente."
+        )
+    prefix = "\n".join(commitments)
+    if session["stage"] in {"agreed", "closed", "handoff"}:
+        if session["stage"] == "agreed" and commitments:
+            return prefix
+        return "\n".join(filter(None, [prefix, terminal_response(session, "")]))
+    if session.get("pending_offer_id") and session["stage"] == "awaiting_confirmation":
+        offer = repository.get_offer(session["pending_offer_id"], session["session_id"])
+        terms = "; ".join(f"{p.amount_cop:,} COP el {p.due_date}" for p in offer.installments)
+        proposal = f"Propuesta pendiente: {terms}. ¿Confirmas estas fechas e importes?"
+        return "\n".join(filter(None, [prefix, proposal]))
+    if commitments:
+        return prefix + "\n¿Qué duda tienes sobre estos compromisos?"
+    account = repository.get_account(session["account_id"])
+    return (
+        f"El saldo registrado es {account.balance_cop:,} COP. "
+        "¿Prefieres revisar el pago total o un plan de cuotas?"
+    )
