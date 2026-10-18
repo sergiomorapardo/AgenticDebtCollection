@@ -11,7 +11,7 @@ from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from typing_extensions import TypedDict
 
-from agents.collections.chat_memory import ChatMemory, summarize_history
+from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
 from agents.collections.conversation import requests_end
 from agents.collections.nodes.intake.tools import verify_demo_code
@@ -195,16 +195,7 @@ def recover_history(state: ChatState, runtime: Runtime):
         # Resume the same business conversation, with fresh verification for each Studio thread.
         session = history["sessions"][0]
         binding["session_id"] = session["session_id"]
-        text = summary
-        if session.get("pending_offer_id") and session["stage"] == "awaiting_confirmation":
-            offer = ctx.repository.get_offer(session["pending_offer_id"], binding["session_id"])
-            text += (
-                "\nPropuesta pendiente: "
-                + "; ".join(f"{p.amount_cop:,} COP el {p.due_date}" for p in offer.installments)
-                + ". ¿Confirmas estas fechas e importes?"
-            )
-        elif session["stage"] not in {"agreed", "closed", "handoff"}:
-            text += "\nPodemos continuar con el pago total o un plan de cuotas."
+        text = customer_history_reply(history, ctx.repository)
         response = memory.save_transition(
             state,
             binding,
@@ -244,7 +235,7 @@ def studio_intake(state: ChatState, runtime: Runtime):
         session.update(identity_verified=True, stage="ready")
         account = ctx.repository.get_account(binding["account_id"])
         result["response_text"] = (
-            f"Gracias, verifiqué tu identidad. {state.get('history_summary', '')} El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
+            f"Gracias, verifiqué tu identidad. El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
         )
     return result
 

@@ -171,6 +171,10 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
             assert result["reply"]["stage"] == stage, f"Unexpected stage on turn {index}"
             assert result["messages"][-1]["type"] == "ai"
             assert result["messages"][-1]["content"] == result["reply"]["text"]
+            assert not any(
+                label in result["reply"]["text"]
+                for label in ("Recuperé", "Resumen de las", "Estado:", "Cliente:", "Agente:")
+            ), "Internal history was exposed in a customer message"
             results.append(result)
             print(f"Studio human turn {index}: {stage}")
             checkpoint = request(f"/threads/{thread}/state")["checkpoint"]
