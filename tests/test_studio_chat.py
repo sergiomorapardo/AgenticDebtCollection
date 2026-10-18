@@ -76,12 +76,13 @@ def test_messages_only_end_to_end_and_replay(chat):
     } <= graph.get_graph().nodes.keys()
 
 
-def test_new_thread_requires_verification_then_recalls_agreement(chat):
+@pytest.mark.parametrize("customer", ["1000000001", "123456789"])
+def test_new_thread_requires_verification_then_recalls_agreement(chat, customer):
     send, ctx, _ = chat
     final = agree(send)
     greeting = send("Qué acordamos", "hello", "returning")
     assert final["reply"]["agreement_id"] not in greeting["messages"][-1].content
-    send("1000000001", "customer", "returning")
+    send(customer, "customer", "returning")
     wrong = send("verificar 0000", "wrong", "returning")
     assert "600,000" not in wrong["messages"][-1].content
     recalled = send("verificar 1111", "verify", "returning")
@@ -384,7 +385,7 @@ def test_recall_preserves_commitments_from_earlier_sessions(chat, latest_stage):
 
 
 @pytest.mark.parametrize(
-    "text", ["123456789", "ya te lo pase, era 123456789", "123", "10000000010"]
+    "text", ["987654321", "ya te lo pase, era 987654321", "123", "10000000010"]
 )
 def test_unknown_identification_is_acknowledged_without_model_or_account_access(
     chat, monkeypatch, text
@@ -409,11 +410,11 @@ def test_unknown_identification_is_acknowledged_without_model_or_account_access(
 
 def test_screenshot_unknown_id_then_code_then_correction(chat):
     send, ctx, _ = chat
-    unknown = send("123456789", "unknown")
+    unknown = send("987654321", "unknown")
     assert "No pude encontrar una cuenta" in unknown["reply"]["text"]
     code = send("1111", "premature-code")
     assert "primero necesito tu número de identificación" in code["reply"]["text"]
-    repeated = send("ya te lo pase, era 123456789", "repeated")
+    repeated = send("ya te lo pase, era 987654321", "repeated")
     assert "No pude encontrar una cuenta" in repeated["reply"]["text"]
     assert all("600,000" not in r["reply"]["text"] for r in (unknown, code, repeated))
     assert ChatMemory(ctx.repository).binding("first")["attempts"] == 0
