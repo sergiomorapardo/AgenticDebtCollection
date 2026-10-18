@@ -1,4 +1,6 @@
-# Cobranza Agent Lab
+# AgenticDebtCollection
+
+A conversational debt collection agent that negotiates payment plans and tracks payment commitments.
 
 Agente de cobranza para una fintech ficticia en Colombia, con LangGraph y políticas deterministas.
 **Implementado: primera etapa por texto, ejecutable localmente y en LangGraph Studio.**
