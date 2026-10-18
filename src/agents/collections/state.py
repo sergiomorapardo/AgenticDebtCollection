@@ -27,6 +27,7 @@ class State(InputState, total=False):
 
     commit_requested: bool
 
+    streamed_reply: dict | None
     wording_reference: str
     wording_draft: str
     wording_attempts: int

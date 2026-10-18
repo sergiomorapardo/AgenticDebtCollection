@@ -39,5 +39,7 @@ def compose_response(state: State, runtime: Runtime[AppContext]) -> dict:
             "agreement_id": session.get("agreement_id"),
             "finished": session["stage"] in {"agreed", "closed", "handoff"},
         }
+        if state.get("streamed_reply"):
+            reply.update(state["streamed_reply"])
         ctx.repository.save_turn({**state, "session": session}, reply)
     return {"session": session, "reply": reply}

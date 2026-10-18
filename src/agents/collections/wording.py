@@ -50,10 +50,18 @@ def _request(ctx, schema, system, payload):
     from langchain_anthropic import ChatAnthropic
 
     client = ChatAnthropic(
-        model=ctx.model, temperature=0, max_tokens=400, timeout=20, max_retries=0
+        model=ctx.model,
+        temperature=0,
+        max_tokens=400,
+        timeout=20,
+        max_retries=0,
+        tags=["langsmith:nostream"],
     )
-    result = client.with_structured_output(schema).invoke(
-        [("system", system), ("human", json.dumps(payload, ensure_ascii=False))]
+    from agents.collections.streaming import internal_model_call
+
+    result = internal_model_call(
+        client.with_structured_output(schema),
+        [("system", system), ("human", json.dumps(payload, ensure_ascii=False))],
     )
     return schema.model_validate(result)
 
@@ -76,6 +84,7 @@ def prepare_reply(state, runtime):
         and not re.search(r"\d|COP|AAAA|servicio", reference)
     )
     return {
+        "streamed_reply": None,
         "wording_reference": reference,
         "wording_draft": "",
         "wording_attempts": 0,
@@ -86,6 +95,16 @@ def prepare_reply(state, runtime):
 
 def draft_reply(state, runtime):
     ctx = resolve_context(runtime)
+    if ctx.stream_responses:
+        from agents.collections.streaming import stream_reply
+
+        streamed = stream_reply(ctx, DRAFT_PROMPT, {"reference": state["wording_reference"]})
+        return {
+            "streamed_reply": streamed,
+            "response_text": streamed["text"],
+            "wording_status": streamed["wording_status"],
+            "wording_attempts": 1,
+        }
     payload = {
         "reference": state["wording_reference"],
         "previous_draft_rejected": state["wording_attempts"] > 0,

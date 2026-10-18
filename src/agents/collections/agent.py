@@ -90,7 +90,11 @@ def build_graph(*, studio=False, checkpointer=None):
     builder.add_conditional_edges(
         "prepare_reply", route_wording, {"draft_reply": "draft_reply", "response": "response"}
     )
-    builder.add_edge("draft_reply", "review_reply")
+    builder.add_conditional_edges(
+        "draft_reply",
+        lambda state: "response" if state.get("streamed_reply") else "review_reply",
+        {"response": "response", "review_reply": "review_reply"},
+    )
     builder.add_conditional_edges(
         "review_reply", route_wording, {"draft_reply": "draft_reply", "response": "response"}
     )
