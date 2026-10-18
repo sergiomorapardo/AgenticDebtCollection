@@ -2,6 +2,7 @@
 
 from langgraph.graph import END, START, StateGraph
 
+from agents.collections.dialogue import plan_dialogue
 from agents.collections.nodes.close.node import close_session
 from agents.collections.nodes.commitment.node import save_commitment
 from agents.collections.nodes.confirmation.node import validate_confirmation
@@ -74,6 +75,8 @@ def build_graph(*, studio=False, checkpointer=None):
         builder.add_edge("response", END)
     builder.add_node("intake", studio_intake if studio else prepare_turn)
     builder.add_node("interpret", interpret_turn)
+    builder.add_node("dialogue_strategy", plan_dialogue)
+    builder.add_edge("interpret", "dialogue_strategy")
     builder.add_node("promise", prepare_promise)
     builder.add_node("negotiation", prepare_payment_plans)
     builder.add_node("confirmation", validate_confirmation)
@@ -91,7 +94,7 @@ def build_graph(*, studio=False, checkpointer=None):
         },
     )
     builder.add_conditional_edges(
-        "interpret",
+        "dialogue_strategy",
         route_intent,
         {
             "promise": "promise",

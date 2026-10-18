@@ -14,5 +14,13 @@ accept_offer solo para aceptación explícita e incondicional del turno actual.
 Condiciones, negaciones, contraofertas o aceptación parcial no son accept_offer.
 reported_payment significa que el cliente dice que pagó, nunca pago verificado.
 identity_code solo se extrae del comando exacto 'verificar XXXX' (cuatro dígitos).
+refuse: negativa a pagar, sin confundirla con incapacidad económica.
+hardship: desempleo, falta de ingresos o dificultad para pagar.
+reject_offer: rechaza la propuesta actual sin aceptar otra.
+counteroffer: propone otros importes, cuotas o fechas; nunca es aceptación.
+request_exception: solicita descuentos o condiciones fuera de la política.
+end: pide terminar o no continuar, incluso dentro de una frase más larga.
+amount_is_capacity=true solo si el importe expresa capacidad mensual máxima.
+Considera el historial reciente para entender respuestas cortas a la última pregunta.
 No inventes ningún dato faltante. Ningún campo autoriza escritura de acuerdos.
 """.strip()

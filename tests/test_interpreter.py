@@ -20,10 +20,10 @@ TODAY = date(2026, 10, 17)
         ("Pago 600.000 el 2026-10-20", "promise", 600000, date(2026, 10, 20), None),
         ("Puedo pagar doscientos mil hoy", "promise", 200000, TODAY, None),
         ("Quiero pagar en tres cuotas desde mañana", "negotiate", None, date(2026, 10, 18), 3),
-        ("Puedo pagar doscientos mil al mes", "negotiate", 200000, None, None),
+        ("Puedo pagar doscientos mil al mes", "counteroffer", 200000, None, None),
         ("Quiero 3 cuotas de 200.000 desde 2026-10-20", "negotiate", 200000, date(2026, 10, 20), 3),
         ("Pago un millón doscientos mil mañana", "promise", 1200000, date(2026, 10, 18), None),
-        ("No puedo pagar", "negotiate", None, None, None),
+        ("No puedo pagar", "hardship", None, None, None),
         ("Ya pagué", "reported_payment", None, None, None),
         ("No reconozco esa deuda", "dispute", None, None, None),
         ("Quiero hablar con un asesor", "request_human", None, None, None),
@@ -50,10 +50,7 @@ def test_acceptance_requires_entire_explicit_utterance(text):
     "text",
     [
         "Si puedo pagar mañana, acepto",
-        "Sí, pero solo dos cuotas",
-        "No acepto",
         "Acepto una parte",
-        "Acepto si me descuentan",
         "Acepto, pagaré 200000",
         "Tal vez acepto",
         "Depende",
@@ -188,3 +185,16 @@ def test_negated_date_is_not_extracted_as_a_draft_update():
 def test_anthropic_question_cannot_confirm(monkeypatch):
     _fake_provider(monkeypatch, {"intent": "accept_offer"})
     assert parse_turn("¿confirmo?", today=TODAY, provider="anthropic") == ParsedTurn()
+
+
+@pytest.mark.parametrize(
+    "text,intent",
+    [
+        ("Sí, pero solo dos cuotas", "counteroffer"),
+        ("no acepto", "reject_offer"),
+        ("no quiero pagar nada", "refuse"),
+        ("acepto si me descuentan", "request_exception"),
+    ],
+)
+def test_objections_and_counteroffers_are_not_acceptance(text, intent):
+    assert parse_turn(text, today=TODAY).intent == intent
