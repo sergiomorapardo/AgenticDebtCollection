@@ -10,9 +10,9 @@ Voice simulation and AWS deployment are [planned stages](docs/ROADMAP.md).
 flowchart LR
     U[CLI or Studio] --> G[LangGraph workflow]
     G <--> D[(SQLite memory)]
-    G --> R[Validated text reply]
+    G --> R[Business-validated outcome or live conversational reply]
     G -. Optional interpretation and wording .-> H[Claude Haiku API]
-    H -. Structured intent and reviewed wording .-> G
+    H -. Internal intent and customer token stream .-> G
     classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
     class U,G,D,R local
@@ -21,7 +21,9 @@ flowchart LR
 
 Green runs locally. Orange is an optional paid API. The default `mock` provider uses a limited,
 offline Spanish parser. Code calculates amounts and enforces policy. With `anthropic`, Haiku
-interprets context and rephrases non-financial questions; a bounded reviewer checks the wording.
+interprets context and streams conversational replies. Identity, offers and agreements remain
+backend-validated. Set `COLLECTIONS_RESPONSE_MODE=reviewed` for whole-text review instead.
+See [streaming behavior](docs/STREAMING.md).
 
 ## Run a conversation
 
@@ -111,13 +113,23 @@ Select `collections_agent` → **Chat** → **New Thread**. Type human messages 
 
 | Message | Agent behavior |
 | --- | --- |
-| `Hola` | Asks for a fictional ID |
+| `Hola` | Introduces itself as a virtual assistant and asks for identification |
 | `Mi cédula es 1000000001` | Requests the scenario verification code |
-| `verificar 1111` | Recovers customer history and the balance |
+| `1111` | Verifies the code, then recovers history and balance |
 | `quiero 3 cuotas desde 2026-10-20` | Presents an installment proposal |
 | `confirmo` | Saves one payment commitment |
 
-Second fixture: `1000000002` with `verificar 2222`. Use fictional data only.
+**Tester setup — outside the customer dialogue:** this is a local simulation with synthetic
+accounts, no real calls or payments. Use only these fixtures; never enter real personal data.
+The agent stays in character as a virtual assistant and does not repeat testing instructions.
+
+| Test customer ID | Verification code | Balance |
+| --- | --- | --- |
+| `1000000001` | `1111` | COP 600,000 |
+| `1000000002` | `2222` | COP 450,000 |
+
+Studio accepts the four-digit code directly; the older `verificar 1111` form still works.
+These test codes do not represent production authentication.
 
 ```mermaid
 flowchart TD
