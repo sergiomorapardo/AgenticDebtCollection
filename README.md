@@ -125,7 +125,7 @@ The agent stays in character as a virtual assistant and does not repeat testing 
 
 | Test customer ID | Verification code | Balance |
 | --- | --- | --- |
-| `1000000001` | `1111` | COP 600,000 |
+| `1000000001` or `123456789` (same account) | `1111` | COP 600,000 |
 | `1000000002` | `2222` | COP 450,000 |
 
 Studio accepts the four-digit code directly; the older `verificar 1111` form still works.
