@@ -1,0 +1,9 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "collections_agent": "./src/agents/collections/studio.py:agent"
+  },
+  "env": ".env"
+}
