@@ -267,3 +267,117 @@ def test_attachments_are_rejected_without_identity_side_effects(chat):
             context=ctx,
         )
     assert not ctx.repository.agreements()
+
+
+def assert_no_internal_history(text):
+    for fragment in (
+        "Recuperé",
+        "Resumen de las",
+        "Estado:",
+        "Cliente:",
+        "Agente:",
+        "conservando el historial",
+        "cerró esta sesión por error",
+        "PRIVATE_TRANSCRIPT",
+    ):
+        assert fragment not in text
+
+
+@pytest.mark.parametrize("outcome", ["ready", "pending", "agreed", "closed", "handoff", "legacy"])
+def test_verified_recall_keeps_transcripts_internal_and_preserves_outcomes(chat, outcome):
+    import json
+
+    from agents.collections.conversation import LEGACY_CLOSE
+
+    send, ctx, _ = chat
+    initial = identify(send)
+    assert_no_internal_history(initial["messages"][-1].content)
+    assert "conversaciones anteriores" not in initial["messages"][-1].content
+    if outcome in {"pending", "agreed"}:
+        send("quiero 3 cuotas desde 2026-10-20", "proposal")
+    if outcome == "agreed":
+        send("confirmo", "confirm")
+    elif outcome == "closed":
+        send("terminar", "stop")
+    elif outcome == "handoff":
+        send("quiero un asesor", "advisor")
+    session_id = ChatMemory(ctx.repository).binding("first")["session_id"]
+    session = ctx.repository.get_session(session_id)
+    if outcome == "legacy":
+        session.update(stage="closed", pending_offer_id=None)
+        session["history"].append(
+            {
+                "event_id": "legacy",
+                "user": "ayudame a programar en python",
+                "assistant": LEGACY_CLOSE,
+            }
+        )
+    # The same marker remains in the bounded internal summary, never the chat response.
+    session["history"].extend(
+        [
+            {
+                "event_id": f"private-{i}",
+                "user": "PRIVATE_TRANSCRIPT",
+                "assistant": "PRIVATE_TRANSCRIPT",
+            }
+            for i in range(3)
+        ]
+    )
+    with ctx.repository.connection() as db:
+        db.execute("UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id))
+    agreements_before = len(ctx.repository.agreements())
+    recalled = identify(send, "returning")
+    assert "PRIVATE_TRANSCRIPT" in recalled["history_summary"]
+    assert_no_internal_history(recalled["messages"][-1].content)
+    assert recalled["reply"]["stage"] == session["stage"]
+    assert ctx.repository.get_session(session_id) == session
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+    assert len(ctx.repository.agreements()) == agreements_before
+    repeated = send("verificar 1111", "verify", "returning")
+    assert repeated["reply"] == recalled["reply"]
+    requested = send("¿Qué acordamos?", "history-request", "returning")
+    assert_no_internal_history(requested["messages"][-1].content)
+    if outcome == "legacy":
+        assert "opciones de pago" in recalled["reply"]["text"]
+        complaint = send("que mal servicio!!!", "complaint", "returning")
+        assert_no_internal_history(complaint["reply"]["text"])
+        assert complaint["reply"]["stage"] == "closed"
+        resumed = send("continuemos", "resume", "returning")
+        assert resumed["reply"]["stage"] == "ready"
+        assert_no_internal_history(resumed["reply"]["text"])
+        assert len(ctx.repository.agreements()) == agreements_before
+    elif outcome in {"closed", "handoff", "agreed"}:
+        assert send("continuemos", "resume", "returning")["reply"]["stage"] == session["stage"]
+
+
+@pytest.mark.parametrize("latest_stage", ["ready", "closed", "handoff"])
+def test_recall_preserves_commitments_from_earlier_sessions(chat, latest_stage):
+    import json
+
+    send, ctx, _ = chat
+    agreed = agree(send)
+    agreement_id = agreed["reply"]["agreement_id"]
+    earlier = ctx.repository.get_session(ChatMemory(ctx.repository).binding("first")["session_id"])
+    newer = {
+        **earlier,
+        "revision": 1,
+        "stage": latest_stage,
+        "agreement_id": None,
+        "pending_offer_id": None,
+        "history": [],
+        "close_reason": "customer_request",
+    }
+    with ctx.repository.connection() as db:
+        db.execute("INSERT INTO sessions VALUES (?,?,?)", ("newer", 1, json.dumps(newer)))
+    verified = identify(send, "returning")
+    requested = send("¿Qué acordamos?", "history-request", "returning")
+    for result in (verified, requested):
+        text = result["reply"]["text"]
+        assert agreement_id in text and "2026-12-20" in text
+        assert "pago no verificado" in text
+        assert "pago total o un plan" not in text
+        assert_no_internal_history(text)
+        assert result["reply"]["stage"] == latest_stage
+    assert ctx.repository.get_session("newer") == newer
+    assert len(ctx.repository.agreements()) == 1
+    assert len(ctx.repository.contacts_for("demo-001")) == 1

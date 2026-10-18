@@ -136,9 +136,10 @@ flowchart TD
     H[Human message in Studio Chat] --> I[Identify fictional customer]
     I --> V[Verify identity]
     V --> M[Recover customer history]
-    M --> S[Bounded factual summary]
+    M --> S[Internal bounded summary]
     S --> G[Resume collection workflow]
-    G --> A[Assistant message in Studio]
+    G --> F[Relevant account facts and next step]
+    F --> A[Assistant message in Studio]
     T[Studio thread and message IDs] -.-> G
 ```
 
@@ -147,9 +148,11 @@ No session, account, or event IDs need to be entered. Studio supplies transport 
 the backend binds them to the verified customer and business conversation.
 
 Open another thread and verify the same fictional identity to recover its history and
-commitments. `¿Qué acordamos?` retrieves a factual summary after verification. Summaries
-show at most three conversations and three commitments; original records remain intact.
-This local summary uses no LLM. An ID alone never grants access to history.
+commitments. `¿Qué acordamos?` returns relevant account facts after verification: a pending
+offer, recorded commitment, or next step. Transcript excerpts, internal status labels and
+recovery messages never become customer replies. The internal summary is bounded to three
+conversations and three commitments; original records remain intact. This uses no extra
+LLM call. An ID alone never grants access to history.
 
 A returning thread resumes the existing business conversation, including its pending
 offer or terminal outcome; it does not initiate another outbound contact. New business

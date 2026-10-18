@@ -166,7 +166,7 @@ def seed_legacy_close(ctx, session_id, closing_text="ayudame a programar en pyth
 def test_legacy_wrong_close_requires_explicit_resume_and_preserves_history(conversation):
     send, ctx, session_id = conversation
     seed_legacy_close(ctx, session_id)
-    assert "por error" in send("¿qué pasó?")["reply"]["text"]
+    assert "opciones de pago" in send("¿qué pasó?")["reply"]["text"]
     assert "continuemos" in send("que mal servicio!!!")["reply"]["text"]
     assert ctx.repository.get_session(session_id)["stage"] == "closed"
     result = send("continuemos", "resume")
