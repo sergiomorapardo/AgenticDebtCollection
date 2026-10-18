@@ -114,7 +114,8 @@ def test_followups_do_not_repeat_identity_step_and_history_is_bounded(monkeypatc
     monkeypatch.setattr(onboarding, "contextual_reply", generate)
     current = binding()
     current, first = onboarding_reply("que pasa loca", current, context())
-    assert "1000000001" in first["text"]
+    assert "1000000001" not in first["text"]
+    assert "número de identificación" in first["text"]
     for text in [
         "y que pasa?",
         "def loca() -> you",
@@ -135,11 +136,12 @@ def test_explicit_identity_help_receives_backend_instructions_without_resuming_p
     ctx = SimpleNamespace(provider="mock")
     current = binding() | {"onboarding_paused": True, "onboarding_intent": "decline"}
     current, response = onboarding_reply(
-        "¿Cuáles son las cédulas ficticias de la demo?", current, ctx
+        "¿Cuál es el dato de identificación que necesitas?", current, ctx
     )
-    assert "1000000001" in response["text"]
+    assert "número de identificación" in response["text"]
+    assert "1000000001" not in response["text"]
     assert current["onboarding_paused"] and not current["verified"]
     current["account_id"] = "demo-001"
     current, response = onboarding_reply("¿Cómo escribo el código de verificación?", current, ctx)
-    assert "escribe verificar" in response["text"]
+    assert "compárteme el código de verificación" in response["text"]
     assert current["attempts"] == 0 and not current["verified"]

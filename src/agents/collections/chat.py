@@ -87,7 +87,7 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
             **base,
             "chat_route": "assistant_message",
             "chat_reply": reply(
-                "La verificación terminó. Inicia un nuevo thread para otra simulación.",
+                "Esta conversación ya terminó. No consultaré tu cuenta ni registraré nuevos compromisos aquí.",
                 "closed",
                 True,
             ),
@@ -97,7 +97,9 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
         response = memory.save_transition(
             base,
             binding,
-            reply("Finalizo la simulación sin consultar tu historial.", "closed", True),
+            reply(
+                "Entendido, finalizo la conversación sin consultar tu historial.", "closed", True
+            ),
         )
         return {**base, "chat_route": "assistant_message", "chat_reply": response}
     if not binding["account_id"]:
@@ -121,7 +123,7 @@ def identify_customer(state: ChatState, runtime: Runtime):
     if account is None:
         if candidates:
             response = reply(
-                "Esa identificación no corresponde a la demo. Usa solo 1000000001 o 1000000002; no ingreses datos reales."
+                "No pude encontrar una cuenta con esa identificación. Revisa el número o dime si prefieres terminar."
             )
             return {"chat_reply": response}
         return respond_onboarding(state, runtime)
@@ -132,7 +134,7 @@ def identify_customer(state: ChatState, runtime: Runtime):
             state,
             binding,
             reply(
-                "Antes de consultar tus conversaciones, escribe verificar seguido del código ficticio del escenario.",
+                "Antes de consultar tu cuenta, ¿me compartes el código de verificación?",
                 "awaiting_identity",
             ),
         )
@@ -154,7 +156,10 @@ def verify_identity(state: ChatState, runtime: Runtime):
     memory = ChatMemory(resolve_context(runtime).repository)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
-        if verify_demo_code(binding["account_id"], state["text"]):
+        code_input = state["text"]
+        if re.fullmatch(r"\d{4}", code_input):
+            code_input = "verificar " + code_input
+        if verify_demo_code(binding["account_id"], code_input):
             binding["verified"] = True
             memory.save_binding(state["chat_thread"], binding)
             return {"chat_route": "recover_history"}
@@ -165,11 +170,11 @@ def verify_identity(state: ChatState, runtime: Runtime):
             state,
             binding,
             reply(
-                "La verificación ficticia no coincide."
+                "El código de verificación no coincide."
                 + (
                     " Finalizo sin consultar tu historial."
                     if closed
-                    else " Usa verificar y el código del escenario."
+                    else " Revisa el código e inténtalo de nuevo."
                 ),
                 "closed" if closed else "awaiting_identity",
                 closed,
@@ -239,7 +244,7 @@ def studio_intake(state: ChatState, runtime: Runtime):
         session.update(identity_verified=True, stage="ready")
         account = ctx.repository.get_account(binding["account_id"])
         result["response_text"] = (
-            f"Identidad ficticia verificada. {state.get('history_summary', '')} El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
+            f"Gracias, verifiqué tu identidad. {state.get('history_summary', '')} El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
         )
     return result
 
