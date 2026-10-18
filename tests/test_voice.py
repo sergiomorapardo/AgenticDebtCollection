@@ -317,6 +317,8 @@ def test_voice_api_nine_digit_id_offer_and_stale_playback(voice_api):
         assert response.status_code == 200
         state = response.json()
     assert state["details"]["stage"] == "awaiting_confirmation"
+    names = [event["name"] for event in voice_api.get("/api/trace").json()["events"]]
+    assert "negotiation" in names and "commitment" not in names
     assert api_post(voice_api, "text", state=state, payload={"text": "confirmo"}).status_code == 400
     old_audio = state["audio_id"]
     state = api_post(voice_api, "retry", state=state).json()
@@ -327,6 +329,8 @@ def test_voice_api_nine_digit_id_offer_and_stale_playback(voice_api):
     state = finish_playback(voice_api, state)
     result = api_post(voice_api, "text", state=state, payload={"text": "confirmo"}).json()
     assert result["finished"] and result["details"]["agreement_id"]
+    names = [event["name"] for event in voice_api.get("/api/trace").json()["events"]]
+    assert "confirmation" in names and "commitment" in names
     new_call = api_post(voice_api, "start").json()
     assert new_call["session_id"] != result["session_id"]
     assert api_post(voice_api, "end", state=result).status_code == 400
@@ -392,3 +396,113 @@ def test_voice_api_caches_uncertain_failure_without_repeating_turn(voice_api, se
     assert replay.json() == response.json()
     assert len(attempts) == 1
     assert len(voice_api.get("/api/session").json()["history"]) == 4
+
+
+def test_execution_trace_matches_graph_and_excludes_customer_content(session):
+    session.send("Mi cédula es 123456789")
+    trace = session.trace.snapshot()
+    assert trace["turn"] == 1
+    assert set(trace["topology"]["nodes"]) == set(session.graph.get_graph().nodes)
+    assert [event["name"] for event in trace["events"]] == [
+        "human_input",
+        "identify_customer",
+        "assistant_message",
+        "text_to_speech",
+    ]
+    assert all(event["status"] == "complete" for event in trace["events"])
+    assert all(event["duration_ms"] >= 0 for event in trace["events"])
+    serialized = json.dumps(trace)
+    for private in ("123456789", "Mi cédula", "1111", "test-secret", "demo-001"):
+        assert private not in serialized
+    assert "started" not in serialized
+    session.send("1111")
+    assert session.trace.snapshot()["turn"] == 2
+    assert "verify_identity" in [event["name"] for event in session.trace.snapshot()["events"]]
+
+
+def test_trace_audio_retry_and_failures_do_not_replay_nodes(session, monkeypatch):
+    session.send("Hola")
+    original = session.trace.snapshot()["events"]
+    session.speech.fail = True
+    session.retry_audio()
+    failed = session.trace.snapshot()["events"]
+    assert failed[:-1] == original
+    assert failed[-1]["name"] == "text_to_speech"
+    assert failed[-1]["status"] == "error"
+
+    def fail(path):
+        raise SpeechError("private-transcript-secret")
+
+    monkeypatch.setattr(session.speech, "transcribe", fail)
+    with pytest.raises(SpeechError):
+        session.respond_to_audio("test.wav")
+    events = session.trace.snapshot()["events"]
+    assert len(events) == 1 and events[0]["status"] == "error"
+    assert events[0]["name"] == "speech_to_text"
+    assert "private-transcript-secret" not in json.dumps(events)
+
+
+def test_trace_is_readable_during_a_running_node_and_scoped_to_browser(voice_api, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from fastapi.testclient import TestClient
+    from langgraph.graph import END, START, StateGraph
+
+    import collections_lab.channels.voice_session as module
+
+    entered, release = Event(), Event()
+
+    def blocked_node(state):
+        entered.set()
+        assert release.wait(5)
+        return {"reply": {"text": "Synthetic response", "finished": False, "stage": "ready"}}
+
+    builder = StateGraph(dict)
+    builder.add_node("blocked_node", blocked_node)
+    builder.add_edge(START, "blocked_node")
+    builder.add_edge("blocked_node", END)
+    graph = builder.compile()
+    monkeypatch.setattr(module, "build_graph", lambda **kwargs: graph)
+    initial = voice_api.get("/api/trace").json()
+    assert not initial["events"] and initial["session_id"] is None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = pool.submit(api_post, voice_api, "start", key="d" * 32)
+        try:
+            assert entered.wait(3)
+            snapshot = pool.submit(voice_api.get, "/api/trace").result(timeout=2).json()
+            assert snapshot["events"][0]["name"] == "blocked_node"
+            assert snapshot["events"][0]["status"] == "running"
+            assert not pending.done()
+            with TestClient(voice_api.app, base_url="http://127.0.0.1") as other:
+                assert other.get("/api/trace").status_code == 401
+                other.get("/")
+                assert other.get("/api/trace").json()["events"] == []
+        finally:
+            release.set()
+        result = pending.result(timeout=3)
+    assert result.status_code == 200
+    trace = voice_api.get("/api/trace").json()
+    assert trace["events"][0]["status"] == "complete"
+    assert trace["session_id"] == result.json()["session_id"]
+    api_post(voice_api, "start", key="d" * 32)
+    assert voice_api.get("/api/trace").json() == trace
+
+
+def test_trace_reports_graph_failure_without_exception_text(voice_api, monkeypatch):
+    from langgraph.graph import END, START, StateGraph
+
+    import collections_lab.channels.voice_session as module
+
+    def failed_node(state):
+        raise RuntimeError("private-provider-secret")
+
+    builder = StateGraph(dict)
+    builder.add_node("failed_node", failed_node)
+    builder.add_edge(START, "failed_node")
+    builder.add_edge("failed_node", END)
+    monkeypatch.setattr(module, "build_graph", lambda **kwargs: builder.compile())
+    assert api_post(voice_api, "start").status_code == 500
+    trace = voice_api.get("/api/trace").json()
+    assert trace["events"][0]["status"] == "error"
+    assert "private-provider-secret" not in json.dumps(trace)

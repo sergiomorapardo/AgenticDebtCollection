@@ -18,10 +18,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from agents.collections.agent import build_graph
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext
 from collections_lab.channels.elevenlabs import ElevenLabsSpeech, SpeechError
-from collections_lab.channels.voice_session import VoiceSession
+from collections_lab.channels.voice_session import ExecutionTrace, VoiceSession
 from collections_lab.config.settings import load_settings
 
 MAX_AUDIO_BYTES = 10 * 1024 * 1024
@@ -37,6 +38,7 @@ class BrowserSession:
     ended: float | None = None
     lock: RLock = field(default_factory=RLock)
     responses: OrderedDict = field(default_factory=OrderedDict)
+    trace: ExecutionTrace | None = None
 
 
 def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4-5-20251001", now):
@@ -46,6 +48,7 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
     browsers = {}
     registry_lock = RLock()
+    empty_trace = ExecutionTrace(build_graph(studio=True), None).snapshot()
 
     def browser(request):
         with registry_lock:
@@ -120,6 +123,13 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
         with entry.lock:
             return snapshot(entry)
 
+    @app.get("/api/trace")
+    def trace(request: Request):
+        entry = browser(request)
+        # Intentionally independent of entry.lock: a long node must remain observable.
+        current_trace = entry.trace
+        return current_trace.snapshot() if current_trace else empty_trace
+
     @app.get("/api/audio/{audio_id}")
     def audio(audio_id: str, request: Request):
         entry = browser(request)
@@ -151,6 +161,7 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
                         SQLiteRepository(directory / "conversation.sqlite3"), now, provider, model
                     )
                     call = VoiceSession(context, speech, directory)
+                    entry.trace = call.trace
                     entry.started, entry.ended = monotonic(), None
                     call.send("Hola")
                     entry.call = call
