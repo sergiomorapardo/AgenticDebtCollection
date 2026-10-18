@@ -209,3 +209,18 @@ API/graph regressions, not a claim of manual browser coverage. See [negotiation]
 | OB-05 | Model predicts willingness or fails | No identity authority; visible error with retry on failure | `test_structured_interpreter_has_no_identity_authority`, `test_model_failure_keeps_thread_open_and_reports_error` |
 
 CI also replays OB-01 through the running LangGraph server before testing verified flows.
+
+
+## Contextual onboarding wording
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| OW-01 | Follow-up or code joke | Writer/reviewer receive current text and recent dialogue, without account history | `test_current_message_and_history_reach_writer_and_reviewer` |
+| OW-02 | Reviewer rejects scope or pause | Retry once, then safe reference with rejected status | `test_reviewer_rejection_retries_then_uses_reference` |
+| OW-03 | New numerical claim or exact duplicate | Never deliver the draft | `test_numeric_claims_and_exact_repetitions_never_reach_customer` |
+| OW-04 | Several follow-ups | No repeated identity script; retain at most four exchanges | `test_followups_do_not_repeat_identity_step_and_history_is_bounded` |
+| OW-05 | Ask how to identify while paused | Give synthetic instructions without resuming or verifying | `test_explicit_identity_help_receives_backend_instructions_without_resuming_pause` |
+
+Live wording is probabilistic; offline tests validate routing and safeguards rather than
+claiming universal conversational quality. The screenshot sequence is also checked manually
+against Haiku with synthetic messages before integration.
