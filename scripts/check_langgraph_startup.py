@@ -143,44 +143,80 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
             return json.load(response)
 
     schemas = request(f"/assistants/{assistant_id}/schemas")
-    assert set(schemas["input_schema"]["properties"]) == {
-        "session_id",
-        "event_id",
-        "account_id",
-        "text",
-    }, "Unexpected Studio input schema"
-    thread = request("/threads", {})["thread_id"]
-    turns = [
-        ("", "awaiting_identity"),
-        ("verificar 1111", "ready"),
-        ("quiero 3 cuotas desde 2026-10-20", "awaiting_confirmation"),
-        ("confirmo", "agreed"),
-    ]
-    configurable = {"thread_id": thread}
-    for index, (text, stage) in enumerate(turns, start=1):
-        payload = {
-            "assistant_id": assistant_id,
-            "input": {
-                "session_id": "studio-smoke",
-                "event_id": str(index),
-                "account_id": "demo-001",
-                "text": text,
-            },
-            # Studio mirrors thread and checkpoint IDs into runtime.context.
-            "config": {"configurable": dict(configurable)},
-        }
-        result = request(f"/threads/{thread}/runs/wait", payload)
-        assert "__error__" not in result, f"Studio turn {index} failed: {result.get('__error__')}"
-        assert result["reply"]["stage"] == stage, f"Unexpected stage on Studio turn {index}"
-        print(f"Studio turn {index}: {stage}")
-        checkpoint = request(f"/threads/{thread}/state")["checkpoint"]
-        configurable["thread_ts"] = checkpoint["checkpoint_id"]
+    assert set(schemas["input_schema"]["properties"]) == {"messages"}, (
+        "Studio must accept messages only"
+    )
+    assert "messages" in schemas["output_schema"]["properties"]
 
-    replay = request(f"/threads/{thread}/runs/wait", payload)
-    assert replay["reply"] == result["reply"], "Replay changed the saved reply"
+    def conversation(turns):
+        thread = request("/threads", {})["thread_id"]
+        configurable = {"thread_id": thread}
+        results = []
+        for index, (text, stage) in enumerate(turns, start=1):
+            payload = {
+                "assistant_id": assistant_id,
+                "input": {
+                    "messages": [
+                        {
+                            "type": "human",
+                            "content": [{"type": "text", "text": text}],
+                            "id": f"human-{index}",
+                        }
+                    ]
+                },
+                "config": {"configurable": dict(configurable)},
+            }
+            result = request(f"/threads/{thread}/runs/wait", payload)
+            assert "__error__" not in result, result.get("__error__")
+            assert result["reply"]["stage"] == stage, f"Unexpected stage on turn {index}"
+            assert result["messages"][-1]["type"] == "ai"
+            assert result["messages"][-1]["content"] == result["reply"]["text"]
+            results.append(result)
+            print(f"Studio human turn {index}: {stage}")
+            checkpoint = request(f"/threads/{thread}/state")["checkpoint"]
+            configurable["thread_ts"] = checkpoint["checkpoint_id"]
+        replay = request(f"/threads/{thread}/runs/wait", payload)
+        assert replay["reply"] == result["reply"], "Replay changed the saved reply"
+        assert replay["messages"] == result["messages"], "Replay duplicated messages"
+        return results
+
+    completed = conversation(
+        [
+            ("Hola", "awaiting_customer"),
+            ("Mi cédula es 1000000001", "awaiting_identity"),
+            ("verificar 1111", "ready"),
+            ("quiero 3 cuotas desde 2026-10-20", "awaiting_confirmation"),
+            ("confirmo", "agreed"),
+        ]
+    )[-1]
+    agreement_id = completed["reply"]["agreement_id"]
+    recalled = conversation(
+        [
+            ("Hola", "awaiting_customer"),
+            ("1000000001", "awaiting_identity"),
+            ("verificar 0000", "awaiting_identity"),
+            ("verificar 1111", "agreed"),
+        ]
+    )
+    assert all(agreement_id not in str(turn) for turn in recalled[:-1])
+    assert agreement_id in recalled[-1]["messages"][-1]["content"]
+    assert "2026-12-20" in recalled[-1]["messages"][-1]["content"]
+    other = conversation(
+        [
+            ("1000000002", "awaiting_identity"),
+            ("verificar 2222", "ready"),
+        ]
+    )
+    assert agreement_id not in str(other)
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT COUNT(*) FROM agreements").fetchone()[0] == 1
-    print("Studio conversation and replay OK: one persisted agreement")
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM contacts WHERE account_id='demo-001'"
+            ).fetchone()[0]
+            == 1
+        )
+    print("Studio chat, replay, verified recall, and customer isolation OK")
 
 
 if __name__ == "__main__":
