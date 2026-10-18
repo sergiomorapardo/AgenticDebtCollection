@@ -159,6 +159,8 @@ Live Haiku calls have not been validated; tracing is disabled by default.
 
 | Start here | What you will see |
 | --- | --- |
+| [Use cases](docs/USE_CASES.md) | Happy paths, failures, edge cases, evidence, and pending acceptance cases |
+| [Local persistence](docs/LOCAL_STORAGE.md) | SQLite today, DynamoDB Local recommendation, and worktree lifecycle |
 | [Architecture](docs/ARCHITECTURE.md) | Exact graph, routing, storage, and policy boundaries |
 | [Roadmap](docs/ROADMAP.md) | Text → simulated voice → staging → telephony |
 | [Validation](docs/VALIDATION.md) | Reproducible turns and verified vs. pending checks |
