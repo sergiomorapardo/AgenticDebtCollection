@@ -63,7 +63,9 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
     event = hashlib.sha256(json.dumps([thread, message.id]).encode()).hexdigest()
     cached = memory.replay(thread, event, digest)
     if not isinstance(messages[-1], HumanMessage) and not (
-        cached and isinstance(messages[-1], AIMessage) and messages[-1].id == "reply:" + event
+        cached
+        and isinstance(messages[-1], AIMessage)
+        and messages[-1].id == (cached.get("message_id") or "reply:" + event)
     ):
         raise ValueError("Send a human message to continue the conversation.")
     binding = memory.binding(thread)
@@ -250,5 +252,10 @@ def assistant_message(state: ChatState, runtime: Runtime):
     )
     return {
         "reply": response,
-        "messages": [AIMessage(content=response["text"], id="reply:" + state["chat_event"])],
+        "messages": [
+            AIMessage(
+                content=response["text"],
+                id=response.get("message_id") or "reply:" + state["chat_event"],
+            )
+        ],
     }
