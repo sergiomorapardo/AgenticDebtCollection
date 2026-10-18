@@ -224,3 +224,14 @@ CI also replays OB-01 through the running LangGraph server before testing verifi
 Live wording is probabilistic; offline tests validate routing and safeguards rather than
 claiming universal conversational quality. The screenshot sequence is also checked manually
 against Haiku with synthetic messages before integration.
+
+## Customer-facing collection outcomes
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| UX-01 | Plan → explicit confirmation | Natural offer/commitment text; one agreement; balance still unpaid | `test_collection_outcomes_use_natural_copy_without_changing_business_effects` |
+| UX-02 | Refusal, stop, reported payment, exception, advisor or zero capacity | Natural closure/review wording; no agreement or payment; no promised live transfer | Same parametrized test |
+
+Testing notices and fixture instructions remain in the README. The dialogue identifies a
+virtual assistant and stays in character; it must not invent an actual company or claim a
+real transfer. The legacy false-closure signature remains unchanged for historical recovery.
