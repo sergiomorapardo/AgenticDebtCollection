@@ -243,7 +243,43 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
             ).fetchone()[0]
             == 1
         )
-    print("Studio chat, replay, verified recall, and customer isolation OK")
+    # Reproduce the historical closure on the second synthetic account, then resume
+    # through a fresh verified Studio thread with natural language instead of a command.
+    from agents.collections.conversation import LEGACY_CLOSE
+
+    with sqlite3.connect(database) as connection:
+        session_id, raw = connection.execute(
+            "SELECT id,data FROM sessions WHERE json_extract(data,'$.account_id')='demo-002' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        session = json.loads(raw)
+        session.update(stage="closed", pending_offer_id=None)
+        session["history"].append(
+            {
+                "event_id": "legacy-smoke",
+                "user": "ayudame a programar en python",
+                "assistant": LEGACY_CLOSE,
+            }
+        )
+        connection.execute(
+            "UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id)
+        )
+    resumed = conversation(
+        [
+            ("1000000002", "awaiting_identity"),
+            ("2222", "closed"),
+            ("sigue", "ready"),
+        ]
+    )
+    assert "dime continuemos" not in resumed[1]["reply"]["text"]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM agreements").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM contacts WHERE account_id='demo-002'"
+            ).fetchone()[0]
+            == 1
+        )
+    print("Studio chat, replay, verified recall, customer isolation, and natural continuation OK")
 
 
 if __name__ == "__main__":
