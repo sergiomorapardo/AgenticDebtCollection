@@ -15,7 +15,8 @@
 - Each pull request may change at most 12 files, counting additions, modifications, deletions, configuration, tests, documentation, and lockfiles against its immediate base branch.
 - Split work into sequential, coherent groups. Complete and review each pull request before starting the next dependent group.
 - Group each commit by responsibility. Prefer multiple meaningful commits in a pull request; never combine unrelated groups merely to create a single commit.
-- Preserve source branches after squash merge so their original commit history remains available. Do not delete these branches locally or remotely without explicit user authorization.
+- Keep automatic deletion of remote source branches enabled after pull requests are merged. Do not recreate a merged branch merely to preserve its name; use the pull request to inspect its original commits.
+- Automatic remote cleanup does not authorize deleting local branches or worktrees, or retroactively deleting older remote branches. Preserve those unless separately requested.
 - Review each finished pull request and run checks appropriate to its stage before proceeding. State any validation that requires a later integration layer.
 
 - Use Conventional Commits for every commit: `<type>(<optional-scope>): <description>`.
