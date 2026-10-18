@@ -11,8 +11,8 @@ flowchart LR
     U[CLI or Studio] --> G[LangGraph workflow]
     G <--> D[(SQLite memory)]
     G --> R[Validated text reply]
-    G -. Optional intent extraction .-> H[Claude Haiku API]
-    H -. Structured intent .-> G
+    G -. Optional interpretation and wording .-> H[Claude Haiku API]
+    H -. Structured intent and reviewed wording .-> G
     classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
     class U,G,D,R local
@@ -20,7 +20,8 @@ flowchart LR
 ```
 
 Green runs locally. Orange is an optional paid API. The default `mock` provider uses a limited,
-offline Spanish parser; code calculates amounts, enforces policy, and composes replies in both modes.
+offline Spanish parser. Code calculates amounts and enforces policy. With `anthropic`, Haiku
+interprets context and rephrases non-financial questions; a bounded reviewer checks the wording.
 
 ## Run a conversation
 
@@ -144,16 +145,21 @@ sessions still pass the existing contact controls. SQLite holds business records
 verified identity bindings; Studio holds message checkpoints. For independent scenarios,
 use a separate database (`COLLECTIONS_DATABASE_PATH`).
 
-## Optional Haiku extraction
+## Haiku conversation mode
 
-Set your own `ANTHROPIC_API_KEY` in the local `.env`, then run:
+Set `COLLECTIONS_LLM_PROVIDER=anthropic` and your `ANTHROPIC_API_KEY` in local `.env`
+for Studio. Restart `uv run langgraph dev` after changing configuration. For the CLI:
 
 ```bash
 uv run collections-lab chat --database .local/haiku.sqlite3 --session haiku-001 --provider anthropic
 ```
 
 This consumes tokens using `claude-haiku-4-5-20251001`. There is no automatic provider fallback.
-Live Haiku calls have not been validated; tracing is disabled by default.
+Tracing is disabled by default. Interpretation can use the latest four persisted turns.
+Wording and review receive only the backend's authorized response reference, without customer
+history. Exact dates and confirmations, offer schedules, terminal replies, and agreement writes
+remain deterministic. `wording_status` exposes `validated`, `deterministic`, `rejected`, or
+`model_error`; rejected wording uses the reference after at most one regeneration.
 
 ## Explore the repository
 

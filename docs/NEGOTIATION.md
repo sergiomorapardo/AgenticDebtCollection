@@ -47,3 +47,30 @@ Monthly capacity is a ceiling, not an exact installment amount. A one-off amount
 converted into a monthly promise. At most three objection turns or three presented proposals
 precede simulated review. Rejected schedules (last three), dialogue stage, and history survive
 process restarts. The LLM never writes agreements or changes the payment policy.
+
+## Contextual wording and the internal loop
+
+```mermaid
+flowchart LR
+    S[Backend strategy and reference] --> E{Eligible non-financial question?}
+    E -->|No| P[Persist deterministic reply]
+    E -->|Haiku enabled| D[Draft wording from reference only]
+    D --> R[Review meaning and tone]
+    R -->|Accepted| P
+    R -->|Rejected once| D
+    R -->|Second rejection or provider error| F[Use reference; expose status]
+    F --> P
+```
+
+The interpreter uses the current message and up to four recent turns; current terms take
+precedence over earlier objections. The writer and reviewer receive only the authorized
+reference. This minimizes additional data exposure and prevents mismatched grounding.
+No model rewrites an offer schedule, confirmed commitment, terminal outcome, or replay.
+At most one interpretation call and four wording/review calls occur on an eligible turn;
+exact confirmations and simple dates do not require interpretation calls. Wording errors
+fall back visibly through `reply.wording_status`, without switching provider/model.
+
+Offline evidence: `test_screenshot_refusals_are_understood_without_repeating_or_pressuring`,
+`test_hardship_capacity_counteroffer_and_confirmation`,
+`test_capacity_survives_installment_changes_and_rejection`, and
+`test_studio_retry_loop_is_bounded_and_next_turn_resets`.

@@ -296,6 +296,14 @@ def parse_turn(
         return _parse_mock(text, today)
     if provider != "anthropic":
         raise ValueError(f"Proveedor no soportado: {provider}")
+    # Exact affirmative wording is deterministic; backend confirmation still checks
+    # a current presented offer. The model cannot veto or expand these terms.
+    if _accepts_exactly(text):
+        return ParsedTurn(intent="accept_offer")
+    if re.fullmatch(
+        r"(?:hoy|manana|pasado manana|\d{4}-\d{2}-\d{2})", _normalize(text).strip(" .")
+    ):
+        return _parse_mock(text, today)
     from langchain_anthropic import ChatAnthropic
 
     client = ChatAnthropic(model=model, temperature=0, max_tokens=1024, timeout=30, max_retries=0)

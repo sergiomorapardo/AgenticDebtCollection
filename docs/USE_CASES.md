@@ -81,7 +81,7 @@ Human review is a simulated terminal state; no employee is contacted.
 | --- | --- | --- | --- |
 | NG-01 | `confirmo` before an offer | No agreement | A: `test_accepting_without_offer_does_not_create_agreement` |
 | NG-02 | `no acepto` or `confirmo si me descuentan cien mil` | No agreement; invalidate pending acceptance context | A: `test_rejection_or_conditional_acceptance_never_creates_agreement` |
-| NG-03 | Conditional acceptance followed by a bare `sí` | Require a newly presented proposal | A: `test_conditional_acceptance_invalidates_offer_before_following_yes` |
+| NG-03 | Discount-conditional acceptance followed by a bare `sí` | Simulated human review; no agreement or reopened negotiation | A: `test_conditional_acceptance_invalidates_offer_before_following_yes` |
 | NG-04 | Question phrased like acceptance | Never interpret the question as confirmation | A: `test_question_is_not_confirmation`, `test_anthropic_question_cannot_confirm` (provider stub) |
 | NG-05 | `quiero 12 cuotas desde 2026-10-20` | Simulated handoff; no automatic agreement | A: `test_unsupported_installment_count_requires_human_review` |
 | NG-06 | `ya pagué` | Human review; balance unchanged; no payment posting | A: `test_reported_payment_does_not_mark_debt_as_paid` |
@@ -140,7 +140,7 @@ flowchart LR
 
 | ID | Status | Scenario / acceptance target |
 | --- | --- | --- |
-| GAP-01 | Implemented limit | Mock understands a bounded Spanish grammar; it is not unrestricted natural-language negotiation. Live Haiku accuracy, cost, and end-to-end outage handling need validation. |
+| GAP-01 | Implemented limit | Mock understands a bounded Spanish grammar; it is not unrestricted natural-language negotiation. Two synthetic live Haiku paths passed; broader accuracy, cost, and end-to-end outage evaluation remain pending. |
 | GAP-02 | Implemented limit | Each thread has one customer binding. Changing customer requires a new thread and verification. Terminal business sessions stay terminal when recalled. |
 | GAP-03 | Implemented limit | Only verified business sessions enter customer summaries. A prior unverified CLI contact still counts toward contact limits. Use another database for independent demos. |
 | GAP-04 | P | Dedicated workflow tests for every clarification/turn/identity edge: unknown ID, empty/oversized message, non-human input, advisor request, and maximum turn count. Some guards exist in code; a dedicated regression is not claimed here. |
@@ -169,3 +169,19 @@ acceptance and evidence catalog; [VALIDATION.md](VALIDATION.md) summarizes execu
 For each new feature, add a stable case ID, setup, trigger, expected state, persistence
 invariant, evidence/test name, and status. Turn a reported issue into a failing regression
 before marking it resolved. Keep future cases marked **P** until evidence exists.
+
+## Adaptive negotiation and wording
+
+These cases use the human-message Studio graph with temporary SQLite databases. They are
+API/graph regressions, not a claim of manual browser coverage. See [negotiation](NEGOTIATION.md).
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| NG-10 | Refuse twice, including the screenshot utterances | Ask once, then close respectfully | A: `test_screenshot_refusals_are_understood_without_repeating_or_pressuring` |
+| NG-11 | Hardship → monthly capacity → date → confirm | Affordable schedule, then one commitment | A: `test_hardship_capacity_counteroffer_and_confirmation` |
+| NG-12 | Change installments after declaring capacity | Never exceed remembered monthly capacity | A: `test_capacity_survives_installment_changes_and_rejection` |
+| NG-13 | Reject and request the same schedule | Recall rejection; no pending acceptance | A: `test_rejected_schedule_is_remembered_after_restart_and_not_reoffered` |
+| NG-14 | Clarify that amount is a single payment | Preserve that amount; do not invent full payment | A: `test_one_off_answer_preserves_partial_amount` |
+| NG-15 | Zero capacity | Simulated review without unaffordable offer | A: `test_zero_capacity_does_not_trigger_unaffordable_offers` |
+| NG-16 | Generated wording alters meaning | One retry, then reference; no business effects | A: `test_rejected_wording_retries_once_then_uses_reference` |
+| NG-17 | Wording provider timeout | Reference plus model_error status; no loop | A: `test_model_error_is_observable_and_does_not_loop` |

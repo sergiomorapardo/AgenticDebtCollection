@@ -33,6 +33,7 @@ def compose_response(state: State, runtime: Runtime[AppContext]) -> dict:
         reply = {
             "session_id": state["session_id"],
             "text": text,
+            "wording_status": state.get("wording_status", "deterministic"),
             "stage": session["stage"],
             "offer_id": session.get("pending_offer_id"),
             "agreement_id": session.get("agreement_id"),

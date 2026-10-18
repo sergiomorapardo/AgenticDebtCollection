@@ -1,7 +1,7 @@
 # Architecture
 
 One LangGraph workflow processes **one turn per invocation**. Code routes the turn; an optional
-LLM extracts intent. There is no multi-agent supervisor or parallel model fan-out.
+LLM interprets context and rephrases non-financial questions. There is no multi-agent supervisor or parallel model fan-out.
 
 ## The shared collection graph
 
@@ -12,26 +12,35 @@ Solid arrows are fixed edges; dashed arrows are conditional routes.
 flowchart TD
     START([START]) --> intake
     intake -.-> interpret
-    intake -.-> response
+    intake -.-> prepare_reply
     intake -.-> close
-    interpret -.-> promise
-    interpret -.-> negotiation
-    interpret -.-> confirmation
-    interpret -.-> handoff
-    interpret -.-> close
-    interpret -.-> response
+    interpret --> dialogue_strategy
+    dialogue_strategy -.-> promise
+    dialogue_strategy -.-> negotiation
+    dialogue_strategy -.-> confirmation
+    dialogue_strategy -.-> handoff
+    dialogue_strategy -.-> close
+    dialogue_strategy -.-> prepare_reply
     confirmation -.-> commitment
-    confirmation -.-> response
-    promise --> response
-    negotiation --> response
-    commitment --> response
-    handoff --> response
-    close --> response
+    confirmation -.-> prepare_reply
+    promise --> prepare_reply
+    negotiation --> prepare_reply
+    commitment --> prepare_reply
+    handoff --> prepare_reply
+    close --> prepare_reply
+    prepare_reply -. Eligible Haiku question .-> draft_reply
+    prepare_reply -. Deterministic or replay .-> response
+    draft_reply --> review_reply
+    review_reply -. One retry maximum .-> draft_reply
+    review_reply -. Accepted or reference fallback .-> response
     response --> END([END])
 ```
 
 Generate the current graph directly from code with `uv run collections-lab graph`.
 The next customer message starts a new invocation using the same persisted session.
+The internal wording retry is bounded to two drafts; it never retries negotiation or writes.
+Model review is a quality filter, not a proof of semantic safety. The local simulation still
+requires broader adversarial and conversational evaluation before a real pilot.
 
 ## Studio conversation entry
 
@@ -68,10 +77,13 @@ flowchart LR
     M --> I[Structured intent and proposed terms]
     H --> I
     I --> C[Code validates policy and computes dates / COP]
-    C --> R[Deterministic reply template]
+    C --> R[Authorized reference]
+    R --> W[Optional bounded wording and review]
+    W --> F[Persist and deliver]
     classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
-    class T,P,M,I,C,R local
+    class T,P,M,I,C,R,F local
+    class W paid
     class H paid
 ```
 
