@@ -9,9 +9,9 @@ def plan_dialogue(state, runtime):
     dialogue = dict(session.get("dialogue", {}))
     if intent in {"off_topic", "complaint", "clarify_process"}:
         responses = {
-            "off_topic": "Puedo ayudarte con tu cuenta y las opciones de pago de esta simulación, pero no con programación u otros temas. La sesión sigue abierta. ¿Quieres retomar lo que te preocupa de la deuda?",
+            "off_topic": "Puedo ayudarte con tu cuenta y las opciones de pago, pero no con programación u otros temas. La sesión sigue abierta. ¿Quieres retomar lo que te preocupa de la deuda?",
             "complaint": "Lamento que la atención te haya resultado frustrante. No interpretaré tu queja como una negativa a pagar. ¿Qué parte de la atención te gustaría que aclare o corrija?",
-            "clarify_process": "La sesión sigue abierta. Podemos aclarar una duda sobre la deuda, revisar opciones de pago, solicitar atención humana simulada o terminar si lo pides. ¿Qué necesitas aclarar?",
+            "clarify_process": "La sesión sigue abierta. Podemos aclarar una duda sobre la deuda, revisar opciones de pago, dejar una solicitud de atención de un asesor o terminar si lo pides. ¿Qué necesitas aclarar?",
         }
         return {"session": session, "intent_route": "response", "response_text": responses[intent]}
     if dialogue.get("awaiting") == "capacity" and state["text"].strip().lower() in {
@@ -28,7 +28,7 @@ def plan_dialogue(state, runtime):
         return {
             "session": session,
             "intent_route": "response",
-            "response_text": "Entiendo que ahora no tienes capacidad de pago. No propondré cuotas que no puedes asumir. Dejo una solicitud de revisión humana simulada, sin registrar un acuerdo.",
+            "response_text": "Entiendo que ahora no tienes capacidad de pago. No propondré cuotas que no puedes asumir. Dejo una solicitud de revisión, sin registrar un acuerdo.",
         }
     if intent not in {"refuse", "hardship", "reject_offer", "counteroffer", "negotiate"}:
         return {}
@@ -39,7 +39,7 @@ def plan_dialogue(state, runtime):
         if dialogue["refusals"] >= 2:
             session["stage"] = "closed"
             session["close_reason"] = "repeated_refusal"
-            text = "Entiendo que no deseas pagar. No insistiré; finalizo esta simulación sin registrar un acuerdo ni modificar el saldo."
+            text = "Entiendo que no deseas pagar. No insistiré; cierro esta conversación sin registrar un acuerdo ni modificar el saldo."
             dialogue["awaiting"] = None
         else:
             text = "Entiendo. ¿Se debe a una dificultad económica o a que no estás de acuerdo con la deuda? Si prefieres terminar, lo respetaré."
@@ -50,7 +50,7 @@ def plan_dialogue(state, runtime):
         if dialogue["objections"] >= 3:
             session["stage"] = "handoff"
             session["handoff_reason"] = "no_viable_plan"
-            text = "No hemos encontrado un plan que se ajuste a tu situación. Dejo una solicitud de revisión humana simulada, sin acuerdo ni contacto con un asesor real."
+            text = "No hemos encontrado un plan que se ajuste a tu situación. Dejo una solicitud de revisión, sin registrar un acuerdo. No puedo transferirte a un asesor desde aquí."
             dialogue["awaiting"] = None
         else:
             prefix = (

@@ -59,7 +59,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "revision": 0,
             "policy_version": load_policy().policy_version,
         }
-        allowed, reason = check_contact(
+        allowed, _reason = check_contact(
             now=ctx.now,
             authorized=repo.is_contact_authorized(account_id),
             prior_contacts=repo.contacts_for(account_id),
@@ -69,13 +69,13 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             return {
                 **base,
                 "session": session,
-                "response_text": f"La simulación no puede iniciar por la regla de contacto: {reason}.",
+                "response_text": "No puedo iniciar esta gestión en este momento. El contacto no está autorizado para este horario o frecuencia.",
             }
         session["contact_started_at"] = ctx.now.isoformat()
         return {
             **base,
             "session": session,
-            "response_text": "Hola, soy el asistente automatizado de la fintech ficticia. Esta es una simulación. Para continuar, introduce verificar y el código ficticio del escenario; no uses datos personales reales.",
+            "response_text": "Hola, soy el asistente virtual de atención de cartera. Para consultar tu cuenta, necesito verificar tu identidad.",
         }
     if session["account_id"] != account_id:
         raise ValueError("Una sesión no puede cambiar de cuenta.")
@@ -97,7 +97,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
         return {
             **base,
-            "response_text": "Retomamos la simulación conservando el historial. No hay una oferta pendiente ni un nuevo compromiso. ¿Qué duda o dificultad de pago quieres revisar?",
+            "response_text": "Retomamos la conversación conservando el historial. No hay una oferta pendiente ni un nuevo compromiso. ¿Qué duda o dificultad de pago quieres revisar?",
         }
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
@@ -110,7 +110,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         session["stage"] = "handoff"
         return {
             **base,
-            "response_text": "Alcanzamos el límite de la simulación. Dejo una solicitud de revisión humana simulada.",
+            "response_text": "No hemos podido resolver la gestión en esta conversación. Dejo registrada una solicitud de revisión.",
         }
     if not session["identity_verified"]:
         if verify_demo_code(account_id, text):
@@ -119,17 +119,17 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             account = repo.get_account(account_id)
             return {
                 **base,
-                "response_text": f"Identidad ficticia verificada. El saldo registrado es {account.balance_cop:,} COP. ¿Puedes pagar el total en los próximos siete días o prefieres explorar un plan de dos o tres cuotas?",
+                "response_text": f"Gracias, verifiqué tu identidad. El saldo registrado es {account.balance_cop:,} COP. ¿Puedes pagar el total en los próximos siete días o prefieres explorar un plan de dos o tres cuotas?",
             }
         session["identity_attempts"] += 1
         if session["identity_attempts"] >= 3:
             session["stage"] = "closed"
             return {
                 **base,
-                "response_text": "No pude verificar la identidad ficticia. Finalizo sin divulgar información de la obligación.",
+                "response_text": "No pude verificar tu identidad. Finalizo sin divulgar información de la obligación.",
             }
         return {
             **base,
-            "response_text": "La verificación ficticia no coincide. Usa verificar y el código del escenario.",
+            "response_text": "El código de verificación no coincide. Revisa el código e inténtalo de nuevo.",
         }
     return {**base, "intake_route": "interpret"}
