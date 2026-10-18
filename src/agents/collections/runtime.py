@@ -38,6 +38,14 @@ def default_context() -> AppContext:
 
 
 def resolve_context(runtime) -> AppContext:
-    if runtime.context is not None and not isinstance(runtime.context, AppContext):
-        raise ValueError("El contexto de ejecución solo puede inyectarlo el backend local.")
-    return runtime.context if runtime.context is not None else default_context()
+    context = runtime.context
+    if isinstance(context, AppContext):
+        return context
+    # Studio mirrors transport thread/checkpoint metadata into context, not business state.
+    if context is None or (
+        isinstance(context, dict)
+        and context.keys() <= {"thread_id", "thread_ts"}
+        and all(isinstance(value, str) for value in context.values())
+    ):
+        return default_context()
+    raise ValueError("El contexto de ejecución solo puede inyectarlo el backend local.")
