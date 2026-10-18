@@ -1,5 +1,7 @@
 """Interpreta lenguaje; las autorizaciones y cálculos pertenecen al backend."""
 
+import json
+
 from anthropic import APIError
 from langgraph.runtime import Runtime
 
@@ -17,12 +19,55 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             today=ctx.today,
             provider=ctx.provider,
             model=ctx.model,
-            context=f"Etapa: {session['stage']}; términos pendientes: {session['draft_terms']}",
+            context=json.dumps(
+                {
+                    "stage": session["stage"],
+                    "terms": session["draft_terms"],
+                    "dialogue": session.get("dialogue", {}),
+                    "recent_turns": session.get("history", [])[-4:],
+                },
+                ensure_ascii=False,
+            ),
         )
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return {
             "intent_route": "response",
             "response_text": "No pude interpretar la respuesta por un error del servicio. No registré ningún acuerdo; puedes reintentar.",
+        }
+    if session.get("dialogue", {}).get("awaiting") == "frequency" and state[
+        "text"
+    ].strip().casefold() in {"al mes", "cada mes", "mensual"}:
+        amount = session["draft_terms"].get("amount_cop")
+        if amount:
+            parsed = parsed.model_copy(
+                update={"intent": "counteroffer", "amount_cop": amount, "amount_is_capacity": True}
+            )
+    if session.get("dialogue", {}).get("awaiting") == "frequency" and state[
+        "text"
+    ].strip().casefold() in {
+        "un único abono",
+        "un unico abono",
+        "un abono",
+        "una sola vez",
+        "único",
+        "unico",
+    }:
+        amount = session["draft_terms"].get("amount_cop")
+        if amount:
+            parsed = parsed.model_copy(
+                update={"intent": "promise", "amount_cop": amount, "amount_is_capacity": False}
+            )
+    # A bare amount answers the preceding capacity question, never accepts an offer.
+    if (
+        parsed.intent == "unclear"
+        and parsed.amount_cop
+        and session.get("dialogue", {}).get("awaiting") == "capacity"
+    ):
+        parsed = parsed.model_copy(update={"intent": "counteroffer", "amount_is_capacity": True})
+    if parsed.amount_cop and parsed.amount_is_capacity:
+        session["dialogue"] = {
+            **session.get("dialogue", {}),
+            "monthly_capacity_cop": parsed.amount_cop,
         }
     interpretation = parsed.model_dump(mode="json")
     route = {
@@ -34,12 +79,28 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         "request_human": "handoff",
         "end": "close",
         "unclear": "response",
+        "refuse": "negotiation",
+        "hardship": "negotiation",
+        "reject_offer": "negotiation",
+        "counteroffer": "negotiation",
+        "request_exception": "handoff",
     }[parsed.intent]
     has_terms = any(
         value is not None for value in (parsed.amount_cop, parsed.payment_date, parsed.installments)
     )
     if route == "response" and has_terms and session["draft_terms"]:
         route = session["draft_terms"].get("route", "promise")
+    if session.get("pending_offer_id") and parsed.intent in {
+        "refuse",
+        "hardship",
+        "reject_offer",
+        "counteroffer",
+        "request_exception",
+    }:
+        offer = ctx.repository.get_offer(session["pending_offer_id"], state["session_id"])
+        rejected = session.get("rejected_offers", [])
+        session["rejected_offers"] = [*rejected, offer.model_dump(mode="json")][-3:]
+        session.update(pending_offer_id=None, draft_terms={})
     if route in {"promise", "negotiation"}:
         session["pending_offer_id"] = None
         previous = session.get("draft_terms", {})
@@ -55,6 +116,8 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 if key in {"amount_cop", "payment_date", "installments"} and value is not None
             }
         )
+        if parsed.amount_cop is not None:
+            terms["amount_is_capacity"] = parsed.amount_is_capacity
         terms["route"] = route
         session["draft_terms"] = terms
         session["stage"] = "awaiting_terms"
@@ -67,7 +130,11 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         session["clarifications"] += 1
         if session["clarifications"] >= 3:
             route = "handoff"
-        response = "Necesito una respuesta más precisa: indica pago completo o el número de cuotas y una fecha AAAA-MM-DD. No registré ningún acuerdo."
+        response = (
+            "Quiero entenderte mejor. ¿Qué te preocupa de la deuda o de la propuesta?"
+            if session["clarifications"] == 1
+            else "Podemos revisar tu capacidad de pago, solicitar un asesor o terminar. ¿Qué prefieres?"
+        )
     else:
         response = ""
     return {

@@ -31,8 +31,14 @@ class ParsedTurn(BaseModel):
         "request_human",
         "end",
         "unclear",
+        "refuse",
+        "hardship",
+        "reject_offer",
+        "counteroffer",
+        "request_exception",
     ] = "unclear"
     amount_cop: int | None = Field(default=None, gt=0, strict=True)
+    amount_is_capacity: bool = False
     payment_date: date | None = None
     installments: int | None = Field(default=None, gt=0, strict=True)
     identity_code: str | None = Field(default=None, pattern=r"^\d{4}$")
@@ -200,6 +206,43 @@ def _parse_mock(text: str, today: date) -> ParsedTurn:
         return ParsedTurn(identity_code=identity.group(1))
     if _accepts_exactly(text):
         return ParsedTurn(intent="accept_offer")
+    # Explicit stop requests override negotiation, including compound utterances.
+    if re.search(
+        r"\b(no quiero continuar|no me llamen|no me llames|dejame en paz|terminar|cuelga|adios)\b",
+        normalized,
+    ) and not re.search(r"\b(no quiero terminar|no termines|no cuelgues)\b", normalized):
+        return ParsedTurn(intent="end")
+    if re.search(r"\b(no reconozco|desconozco|no es mia|numero equivocado)\b", normalized):
+        return ParsedTurn(intent="dispute")
+    if re.search(r"\b(descuento|descuentan|condonar|condonacion)\b", normalized):
+        return ParsedTurn(intent="request_exception")
+    fields, ambiguous = _extract_fields(normalized, today)
+    conditional = re.search(r"\b(solo si|depende|quizas|tal vez)\b", normalized)
+    capacity = bool(re.search(r"\b(al mes|mensual|mensuales)\b", normalized))
+    if (
+        not ambiguous
+        and not conditional
+        and fields
+        and re.search(r"\b(solo puedo|puedo pagar|prefiero|mejor|pero solo)\b", normalized)
+        and not re.search(r"\b(no puedo|no pagare|si puedo)\b", normalized)
+        and (capacity or re.search(r"\b(solo puedo|pero solo|mejor|prefiero)\b", normalized))
+    ):
+        return ParsedTurn(intent="counteroffer", amount_is_capacity=capacity, **fields)
+    if re.search(r"\b(no quiero pagar|no voy a pagar|no pagare nada)\b", normalized):
+        return ParsedTurn(intent="refuse")
+    if re.search(r"\b(no acepto|no me sirve|no me funciona|muy alta|demasiado alta)\b", normalized):
+        return ParsedTurn(intent="reject_offer")
+    if re.search(
+        r"\b(no puedo pagar|sin trabajo|sin empleo|sin ingresos|no tengo dinero|perdi mi trabajo)\b",
+        normalized,
+    ):
+        return ParsedTurn(intent="hardship")
+    if (
+        re.fullmatch(r"(?:\$?\s*[\d.,]+(?: mil)?|[a-z ]+ mil)(?: al mes| mensuales)?", normalized)
+        and fields
+        and not ambiguous
+    ):
+        return ParsedTurn(amount_is_capacity=capacity, **fields)
     if re.search(r"\b(si|pero|quizas|tal vez|depende|solo si|acepto|confirmo|o)\b", normalized):
         return ParsedTurn()
     if re.search(r"\b(no reconozco|desconozco|disputo|no es mia|numero equivocado)\b", normalized):
@@ -227,7 +270,7 @@ def _parse_mock(text: str, today: date) -> ParsedTurn:
     if re.search(
         r"\b(cuotas?|negociar|plan de pagos?|no puedo pagar|al mes|mensual)\b", normalized
     ):
-        return ParsedTurn(intent="negotiate", **fields)
+        return ParsedTurn(intent="negotiate", amount_is_capacity=capacity, **fields)
     if re.search(
         r"\b(pagare|pago|pagar|prometo|promesa|abonar|abono)\b", normalized
     ) and not re.search(r"\b(no|nunca)\b", normalized):
