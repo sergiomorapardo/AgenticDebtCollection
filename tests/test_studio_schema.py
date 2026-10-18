@@ -6,15 +6,16 @@ from datetime import datetime
 import pytest
 from langgraph.runtime import Runtime
 
+from agents.collections.agent import agent
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext, resolve_context
-from agents.collections.studio import agent
+from agents.collections.studio import agent as studio_agent
 
 
 def test_studio_schemas_do_not_expose_repository_or_trusted_state():
-    schema = agent.get_input_jsonschema()
-    assert set(schema["properties"]) == {"session_id", "event_id", "account_id", "text"}
-    assert agent.get_context_jsonschema() is None
+    schema = studio_agent.get_input_jsonschema()
+    assert set(schema["properties"]) == {"messages"}
+    assert studio_agent.get_context_jsonschema() is None
 
 
 @pytest.mark.parametrize(

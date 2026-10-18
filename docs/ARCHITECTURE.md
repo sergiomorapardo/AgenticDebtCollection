@@ -3,9 +3,9 @@
 One LangGraph workflow processes **one turn per invocation**. Code routes the turn; an optional
 LLM extracts intent. There is no multi-agent supervisor or parallel model fan-out.
 
-## The implemented graph
+## The shared collection graph
 
-Node names and edges match [agent.py](../src/agents/collections/agent.py).
+The CLI graph below is shared with the conversational Studio entry in [agent.py](../src/agents/collections/agent.py).
 Solid arrows are fixed edges; dashed arrows are conditional routes.
 
 ```mermaid
@@ -32,6 +32,31 @@ flowchart TD
 
 Generate the current graph directly from code with `uv run collections-lab graph`.
 The next customer message starts a new invocation using the same persisted session.
+
+## Studio conversation entry
+
+```mermaid
+flowchart TD
+    START([Human message]) --> human_input
+    human_input -. Unidentified .-> identify_customer
+    human_input -. Unverified .-> verify_identity
+    human_input -. Verified turn .-> intake[Shared collection graph]
+    human_input -. Recall request .-> recover_history
+    human_input -. Replay or closed .-> assistant_message
+    identify_customer --> assistant_message
+    verify_identity -. Verified .-> recover_history
+    verify_identity -. Failed .-> assistant_message
+    recover_history -. New business session .-> intake
+    recover_history -. Existing conversation .-> assistant_message
+    intake --> response
+    response --> assistant_message
+    assistant_message --> END([AI message])
+```
+
+Studio supplies thread and message identifiers. Backend bindings select the customer and
+business session after fictional identity verification. New threads verify again before
+reading memory. Returning threads resume existing sessions; terminal sessions stay terminal.
+Local summaries bound the displayed history without deleting source records or calling an LLM.
 
 ## Interpretation and policy
 
@@ -94,7 +119,8 @@ sequenceDiagram
 uses optimistic session revisions and a transaction at finalization. Staging needs concurrency
 validation against its external storage adapter.
 
-SQLite stores accounts, sessions, offers, agreements, events, and contacts.
+SQLite stores accounts, sessions, offers, agreements, events, contacts, Studio identity bindings,
+and chat replay responses. Onboarding transitions and their responses commit atomically.
 **Agreements are promises: the account balance stays unchanged.**
 
 ## Retries and trusted state
@@ -109,7 +135,8 @@ flowchart TD
     G --> W[Persist turn atomically]
 ```
 
-Only `session_id`, `event_id`, `account_id`, and `text` are public input. The session is bound to
+The CLI accepts `session_id`, `event_id`, `account_id`, and `text`. Studio accepts only `messages`;
+its adapter derives event IDs and retrieves the session/account binding internally. The session is bound to
 its account; identity, balance, and agreement IDs come from trusted storage. Session IDs alone
 are not authentication. Closed, handed-off, and agreed sessions cannot reopen.
 
@@ -125,11 +152,12 @@ are not authentication. Closed, handed-off, and agreed sessions cannot reopen.
 ```mermaid
 flowchart LR
     C[CLI today] --> T[Turn input]
-    S[Studio today] --> T
+    S[Studio Chat] --> M[Human messages and verified customer memory]
+    M --> T
     V[Voice simulator: planned] -. Transcribed text .-> T
     T --> G[Same collections workflow]
     G --> R[Validated reply]
     R -. Planned TTS .-> A[Browser speaker]
 ```
 
-Voice, authentication, external persistence, and AWS are future work. See the [roadmap](ROADMAP.md).
+Voice, production authentication, external persistence, and AWS are future work. See the [roadmap](ROADMAP.md).

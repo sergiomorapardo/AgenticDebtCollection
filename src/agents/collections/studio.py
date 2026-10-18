@@ -1,5 +1,5 @@
-"""Entrada de Studio; cada turno recupera estado desde SQLite local."""
+"""Conversational Studio entry: human messages in, assistant messages out."""
 
-from agents.collections.agent import agent
+from agents.collections.agent import build_graph
 
-__all__ = ["agent"]
+agent = build_graph(studio=True)
