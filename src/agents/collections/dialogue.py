@@ -1,10 +1,19 @@
 """Choose the next conversational step using persisted, bounded negotiation memory."""
 
+from agents.collections.conversation import explicit_refusal
+
 
 def plan_dialogue(state, runtime):
     session = dict(state["session"])
     intent = state.get("interpretation", {}).get("intent")
     dialogue = dict(session.get("dialogue", {}))
+    if intent in {"off_topic", "complaint", "clarify_process"}:
+        responses = {
+            "off_topic": "Puedo ayudarte con tu cuenta y las opciones de pago de esta simulación, pero no con programación u otros temas. La sesión sigue abierta. ¿Quieres retomar lo que te preocupa de la deuda?",
+            "complaint": "Lamento que la atención te haya resultado frustrante. No interpretaré tu queja como una negativa a pagar. ¿Qué parte de la atención te gustaría que aclare o corrija?",
+            "clarify_process": "La sesión sigue abierta. Podemos aclarar una duda sobre la deuda, revisar opciones de pago, solicitar atención humana simulada o terminar si lo pides. ¿Qué necesitas aclarar?",
+        }
+        return {"session": session, "intent_route": "response", "response_text": responses[intent]}
     if dialogue.get("awaiting") == "capacity" and state["text"].strip().lower() in {
         "nada",
         "cero",
@@ -25,10 +34,11 @@ def plan_dialogue(state, runtime):
         return {}
     dialogue["last_intent"] = intent
     if intent == "refuse":
-        dialogue["refusals"] = dialogue.get("refusals", 0) + 1
+        dialogue["refusals"] = dialogue.get("refusals", 0) + int(explicit_refusal(state["text"]))
         session.update(pending_offer_id=None, draft_terms={}, stage="ready")
         if dialogue["refusals"] >= 2:
             session["stage"] = "closed"
+            session["close_reason"] = "repeated_refusal"
             text = "Entiendo que no deseas pagar. No insistiré; finalizo esta simulación sin registrar un acuerdo ni modificar el saldo."
             dialogue["awaiting"] = None
         else:

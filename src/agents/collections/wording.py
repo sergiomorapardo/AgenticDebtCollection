@@ -68,6 +68,8 @@ def prepare_reply(state, runtime):
         and not state.get("commit_requested")
         and not state.get("draft_offer")
         and state.get("interpretation")
+        and state["interpretation"].get("intent")
+        not in {"off_topic", "complaint", "clarify_process"}
         and state["session"].get("identity_verified")
         and state["session"]["stage"] not in {"agreed", "closed", "handoff"}
         and "?" in reference
