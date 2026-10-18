@@ -1,5 +1,6 @@
 """Dependencias por ejecución; el reloj de la demo es explícito y sustituible."""
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -16,6 +17,7 @@ class AppContext:
     now: datetime
     provider: str = "mock"
     model: str = "claude-haiku-4-5-20251001"
+    stream_responses: bool = False
 
     @property
     def today(self):
@@ -29,11 +31,15 @@ def repository_for(path: str) -> SQLiteRepository:
 
 def default_context() -> AppContext:
     settings = load_settings()
+    response_mode = os.getenv("COLLECTIONS_RESPONSE_MODE", "streaming")
+    if response_mode not in {"streaming", "reviewed"}:
+        raise ValueError("COLLECTIONS_RESPONSE_MODE must be streaming or reviewed")
     return AppContext(
         repository_for(str(settings.database_path.resolve())),
         datetime.fromisoformat(settings.demo_now),
         settings.llm_provider,
         settings.anthropic_model,
+        stream_responses=response_mode == "streaming",
     )
 
 

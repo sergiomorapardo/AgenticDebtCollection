@@ -20,13 +20,29 @@ class OnboardingIntent(BaseModel):
 
 def classify_onboarding(text, ctx, history=None):
     normalized = normalize_text(text)
+    if getattr(ctx, "stream_responses", False) and normalized in {
+        "hola",
+        "buenas",
+        "buenos dias",
+        "buenas tardes",
+        "que hay",
+    }:
+        return "greeting"
     if ctx.provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
         client = ChatAnthropic(
-            model=ctx.model, temperature=0, max_tokens=128, timeout=15, max_retries=0
+            model=ctx.model,
+            temperature=0,
+            max_tokens=128,
+            timeout=15,
+            max_retries=0,
+            tags=["langsmith:nostream"],
         )
-        result = client.with_structured_output(OnboardingIntent).invoke(
+        from agents.collections.streaming import internal_model_call
+
+        result = internal_model_call(
+            client.with_structured_output(OnboardingIntent),
             [
                 (
                     "system",
@@ -51,7 +67,7 @@ def classify_onboarding(text, ctx, history=None):
                         ensure_ascii=False,
                     ),
                 ),
-            ]
+            ],
         )
         return OnboardingIntent.model_validate(result).intent
     if ctx.provider != "mock":
@@ -117,10 +133,33 @@ def onboarding_reply(text, binding, ctx):
     if status == "model_error":
         response = "No pude interpretar tu mensaje por un error del servicio. No consulté tu cuenta ni registré cambios; puedes reintentar o escribir terminar."
     wording_status, attempts = "deterministic", 0
+    streamed = {}
     if ctx.provider == "anthropic" and status != "model_error":
-        response, wording_status, attempts = contextual_reply(
-            ctx, text, history, response, binding.get("onboarding_paused", False), intent=intent
-        )
+        if getattr(ctx, "stream_responses", False):
+            # Identity instructions and first greeting are already authorized, short text.
+            if intent not in {"willing", "identity_help"} and not (
+                not previous and intent == "greeting"
+            ):
+                from agents.collections.onboarding_wording import DRAFT_PROMPT
+                from agents.collections.streaming import stream_reply
+
+                streamed = stream_reply(
+                    ctx,
+                    DRAFT_PROMPT,
+                    {
+                        "current_message": redact_dialogue(text),
+                        "recent_dialogue": history,
+                        "reference": redact_dialogue(response),
+                        "intent": intent,
+                        "paused": binding.get("onboarding_paused", False),
+                        "first_response": not history,
+                    },
+                )
+                response, wording_status, attempts = streamed["text"], streamed["wording_status"], 1
+        else:
+            response, wording_status, attempts = contextual_reply(
+                ctx, text, history, response, binding.get("onboarding_paused", False), intent=intent
+            )
     if status != "model_error" and (
         intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
     ):
@@ -136,4 +175,5 @@ def onboarding_reply(text, binding, ctx):
         "interpretation_status": status,
         "wording_status": wording_status,
         "wording_attempts": attempts,
+        **streamed,
     }
