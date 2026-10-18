@@ -1,0 +1,25 @@
+name: Review size
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  review-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Enforce at most 12 changed files
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          count=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | wc -l)
+          echo "Changed files: $count / 12"
+          test "$count" -le 12
+          echo "Commits in this layer: $(git rev-list --count "$BASE_SHA..$HEAD_SHA")"
