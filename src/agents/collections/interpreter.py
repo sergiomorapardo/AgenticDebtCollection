@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agents.collections.conversation import requests_end, social_intent
 from agents.collections.nodes.interpret.prompt import NODE_PROMPT
 
 
@@ -36,6 +37,9 @@ class ParsedTurn(BaseModel):
         "reject_offer",
         "counteroffer",
         "request_exception",
+        "off_topic",
+        "complaint",
+        "clarify_process",
     ] = "unclear"
     amount_cop: int | None = Field(default=None, gt=0, strict=True)
     amount_is_capacity: bool = False
@@ -206,12 +210,11 @@ def _parse_mock(text: str, today: date) -> ParsedTurn:
         return ParsedTurn(identity_code=identity.group(1))
     if _accepts_exactly(text):
         return ParsedTurn(intent="accept_offer")
-    # Explicit stop requests override negotiation, including compound utterances.
-    if re.search(
-        r"\b(no quiero continuar|no me llamen|no me llames|dejame en paz|terminar|cuelga|adios)\b",
-        normalized,
-    ) and not re.search(r"\b(no quiero terminar|no termines|no cuelgues)\b", normalized):
+    if requests_end(text):
         return ParsedTurn(intent="end")
+    boundary = social_intent(text)
+    if boundary:
+        return ParsedTurn(intent=boundary)
     if re.search(r"\b(no reconozco|desconozco|no es mia|numero equivocado)\b", normalized):
         return ParsedTurn(intent="dispute")
     if re.search(r"\b(descuento|descuentan|condonar|condonacion)\b", normalized):
@@ -253,10 +256,6 @@ def _parse_mock(text: str, today: date) -> ParsedTurn:
     ) and not re.search(r"\bno (?:quiero|necesito|prefiero)\b", normalized):
         return ParsedTurn(intent="request_human")
     if re.search(
-        r"\b(terminar|cuelga|adios|no me llamen|no quiero continuar)\b", normalized
-    ) and not re.search(r"\bno (?:quiero terminar|termines|cuelgues)\b", normalized):
-        return ParsedTurn(intent="end")
-    if re.search(
         r"\b(ya pague|ya he pagado|ya realice el pago|ya hice el pago)\b", normalized
     ) and not re.search(r"\b(no|nunca)\b", normalized):
         return ParsedTurn(intent="reported_payment")
@@ -296,6 +295,11 @@ def parse_turn(
         return _parse_mock(text, today)
     if provider != "anthropic":
         raise ValueError(f"Proveedor no soportado: {provider}")
+    if requests_end(text):
+        return ParsedTurn(intent="end")
+    boundary = social_intent(text)
+    if boundary:
+        return ParsedTurn(intent=boundary)
     # Exact affirmative wording is deterministic; backend confirmation still checks
     # a current presented offer. The model cannot veto or expand these terms.
     if _accepts_exactly(text):
@@ -317,6 +321,10 @@ def parse_turn(
         ]
     )
     parsed = ParsedTurn.model_validate(result)
+    if parsed.intent == "end" and not requests_end(text):
+        return ParsedTurn(intent="clarify_process")
+    if parsed.intent in {"off_topic", "complaint", "clarify_process"}:
+        return ParsedTurn(intent=parsed.intent)
     # El modelo nunca puede convertir condiciones o contraofertas en confirmación.
     if parsed.intent == "accept_offer":
         return ParsedTurn(intent="accept_offer") if _accepts_exactly(text) else ParsedTurn()

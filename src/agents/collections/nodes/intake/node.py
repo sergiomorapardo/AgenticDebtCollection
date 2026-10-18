@@ -3,6 +3,12 @@
 from langgraph.runtime import Runtime
 
 from agents.collections.contact import check_contact
+from agents.collections.conversation import (
+    normalize_text,
+    recoverable_misclosure,
+    requests_end,
+    terminal_response,
+)
 from agents.collections.memory import event_hash
 from agents.collections.policy import load_policy
 from agents.collections.runtime import AppContext, resolve_context
@@ -74,21 +80,31 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     if session["account_id"] != account_id:
         raise ValueError("Una sesión no puede cambiar de cuenta.")
     base["session"] = session
+    if recoverable_misclosure(session) and normalize_text(text) in {
+        "continuemos",
+        "retomemos",
+        "quiero continuar",
+        "quiero retomar",
+    }:
+        session.update(
+            stage="ready",
+            pending_offer_id=None,
+            draft_terms={},
+            clarifications=0,
+            close_reason=None,
+            recovered_from="legacy_off_topic_closure",
+        )
+        session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+        return {
+            **base,
+            "response_text": "Retomamos la simulación conservando el historial. No hay una oferta pendiente ni un nuevo compromiso. ¿Qué duda o dificultad de pago quieres revisar?",
+        }
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
-            "response_text": "Esta sesión ya finalizó. Su resultado está registrado; no se realizará otra gestión en esta sesión.",
+            "response_text": terminal_response(session, text),
         }
-    if text.casefold() in {
-        "terminar",
-        "adiós",
-        "adios",
-        "salir",
-        "no me llames",
-        "no me llamen",
-        "no quiero continuar",
-        "cuelga",
-    }:
+    if requests_end(text):
         return {**base, "intake_route": "close"}
     if session["turns"] >= 20:
         session["stage"] = "handoff"

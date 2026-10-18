@@ -34,6 +34,16 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "intent_route": "response",
             "response_text": "No pude interpretar la respuesta por un error del servicio. No registré ningún acuerdo; puedes reintentar.",
         }
+    if parsed.intent in {"off_topic", "complaint", "clarify_process"}:
+        # A conversational "yes" must not accept an earlier financial proposal.
+        session["pending_offer_id"] = None
+        session["stage"] = "awaiting_terms" if session["draft_terms"] else "ready"
+        return {
+            "session": session,
+            "interpretation": parsed.model_dump(mode="json"),
+            "intent_route": "negotiation",
+            "response_text": "",
+        }
     if session.get("dialogue", {}).get("awaiting") == "frequency" and state[
         "text"
     ].strip().casefold() in {"al mes", "cada mes", "mensual"}:

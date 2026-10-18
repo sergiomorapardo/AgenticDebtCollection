@@ -185,3 +185,14 @@ API/graph regressions, not a claim of manual browser coverage. See [negotiation]
 | NG-15 | Zero capacity | Simulated review without unaffordable offer | A: `test_zero_capacity_does_not_trigger_unaffordable_offers` |
 | NG-16 | Generated wording alters meaning | One retry, then reference; no business effects | A: `test_rejected_wording_retries_once_then_uses_reference` |
 | NG-17 | Wording provider timeout | Reference plus model_error status; no loop | A: `test_model_error_is_observable_and_does_not_loop` |
+
+## Conversation boundary regressions
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| CB-01 | Refusal → Python help → `¿que paso?` → complaint | Stay open; explain scope and acknowledge frustration; later negotiation works | A: `test_screenshot_sequence_stays_open_and_can_negotiate` |
+| CB-02 | Model labels an unrelated message `end` | No closure without a current explicit stop directive | A: `test_model_cannot_close_without_current_stop_request` |
+| CB-03 | Pending offer → unrelated topic → `sí` | No agreement; require presenting terms again | A: `test_social_yes_cannot_accept_pending_offer` |
+| CB-04 | Legitimate closure → complaint → `continuemos` | Empathetic explanation; remain closed | A: `test_explicit_close_stays_closed_but_acknowledges_complaint` |
+| CB-05 | Recognized historical false closure → `continuemos` | Recover only on explicit request; preserve history, replay, and single contact | A: `test_legacy_wrong_close_requires_explicit_resume_and_preserves_history` |
+| CB-06 | Old closure caused by a real stop, or later stop/refusal | Never reopen via legacy recovery | A: `test_legacy_real_exit_never_reopens` |

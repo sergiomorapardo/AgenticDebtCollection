@@ -74,3 +74,38 @@ Offline evidence: `test_screenshot_refusals_are_understood_without_repeating_or_
 `test_hardship_capacity_counteroffer_and_confirmation`,
 `test_capacity_survives_installment_changes_and_rejection`, and
 `test_studio_retry_loop_is_bounded_and_next_turn_resets`.
+
+## Topic changes, complaints, and mistaken closure
+
+```mermaid
+flowchart TD
+    T[Current message] --> B{Conversation boundary}
+    B -->|Unrelated topic| S[Explain scope; keep session open]
+    B -->|Service complaint| A[Acknowledge and ask what needs clarification]
+    B -->|Process question| E[Explain available actions]
+    B -->|Explicit stop directive| C[Close with recorded reason]
+    S --> N[Next customer turn]
+    A --> N
+    E --> N
+    L[Legacy false closure after Python request] --> R{Customer explicitly says continuemos?}
+    R -->|No| X[Explain the error and recovery option]
+    R -->|Yes| P[Resume same verified session; preserve history]
+```
+
+`ayudame a programar en python`, `¿que paso?`, and `que mal servicio!!!` do not mean
+stop, refusal to pay, or a debt dispute. Social turns do not consume clarification/refusal
+attempts. Scope, complaint, and service-state replies use their authorized text directly so
+wording cannot drop the scope limit or promise a real human connection. Any pending offer loses its acceptance status so a conversational `sí` cannot
+accidentally sign it; terms and capacity remain available for a newly presented proposal.
+
+A model's `end` classification cannot close the session without a supported explicit stop
+directive in the current message. Hypothetical questions, quoted words, and programming phrases such as
+`mi programa se cuelga` are not stop directives. An explicit stop still applies when
+followed by a question, such as `No me llames más, ¿entendido?`. Broader language still needs evaluation.
+
+Already closed sessions explain their outcome and acknowledge complaints. They stay closed,
+except for the narrowly recognized legacy bug: a verified session closed by the old generic
+closing message immediately after a recognized off-topic Python request, with no agreement,
+no recorded legitimate close reason, and no later refusal/stop. Only `continuemos`, `retomemos`,
+`quiero continuar`, or `quiero retomar` restores that same session. History and contacts remain;
+no offer or agreement is accepted by recovery. Legitimate closures never reopen this way.

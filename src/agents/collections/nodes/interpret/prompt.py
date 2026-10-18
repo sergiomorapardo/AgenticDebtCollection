@@ -25,7 +25,13 @@ hardship: desempleo, falta de ingresos o dificultad para pagar.
 reject_offer: rechaza la propuesta actual sin aceptar otra.
 counteroffer: propone otros importes, cuotas o fechas; nunca es aceptación.
 request_exception: solicita descuentos o condiciones fuera de la política.
-end: pide terminar o no continuar, incluso dentro de una frase más larga.
+off_topic: petición ajena a esta cobranza, por ejemplo ayuda para programar en Python.
+complaint: expresa malestar o critica el servicio; no significa rechazar la deuda.
+clarify_process: pregunta qué pasó, qué puedes hacer o por qué respondió así el agente.
+Estos tres casos NO son end, refuse, dispute ni request_human por sí solos.
+No interpretes un cambio de tema como un deseo implícito de terminar.
+end: pide EXPLÍCITAMENTE terminar esta conversación o no continuar. La solicitud
+actual debe contener esa petición; nunca la deduzcas del historial o del tono.
 amount_is_capacity=true solo si el importe expresa capacidad mensual máxima.
 Considera el historial reciente para entender respuestas cortas a la última pregunta.
 No inventes ningún dato faltante. Ningún campo autoriza escritura de acuerdos.

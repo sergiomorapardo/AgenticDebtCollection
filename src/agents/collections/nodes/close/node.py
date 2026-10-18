@@ -5,7 +5,7 @@ from agents.collections.state import State
 
 def close_session(state: State) -> dict:
     session = dict(state["session"])
-    session.update(stage="closed", pending_offer_id=None)
+    session.update(stage="closed", pending_offer_id=None, close_reason="customer_request")
     return {
         "session": session,
         "response_text": "Finalizo la simulación. No se ha registrado un nuevo compromiso ni realizado un pago.",
