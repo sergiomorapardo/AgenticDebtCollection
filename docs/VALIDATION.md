@@ -29,9 +29,9 @@ Change its text while keeping the same event ID: expect a conflict.
 | --- | --- |
 | Policies and interpretation | Offline unit tests for amounts, dates, contact controls, and conservative parsing |
 | Stateful workflow | Recovery, retries, isolation, concurrent persistence, invalidated offers, and rollback tests |
-| Studio schema | Import and public JSON input schema tests; no repository object exposed as input |
-| Studio development server API | CI starts the real server, checks health/registration/schema, runs four Studio-style HTTP turns with thread context, and verifies replay saves only one agreement |
-| Studio browser UI | Manually submitted greeting, identity verification, installment request, and confirmation in Chrome; refreshed traces showed the saved commitment and SQLite contained one agreement |
+| Studio schema | Messages-only input, AI responses, verified identity, cross-thread recall, and customer isolation tests |
+| Studio development server API | CI starts the real server, checks health/registration/schema, runs human-message conversations with thread/checkpoint metadata, verifies replay, returning-customer recall, and isolation between two customers |
+| Studio browser Chat | Chrome: natural messages through identity, negotiation, and confirmation; a new thread recovered the same agreement after verification; Graph mode exposed all identity and memory nodes |
 | Packaging | Lint, formatting, locked dependencies, wheel, and source distribution |
 
 | Pending | Requires |

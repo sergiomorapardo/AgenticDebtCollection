@@ -106,28 +106,43 @@ a later bare confirmation cannot accept it. Present new terms first.
 uv run langgraph dev
 ```
 
-Select `collections_agent`, create one Studio thread for the session, and start with:
+Select `collections_agent` → **Chat** → **New Thread**. Type human messages directly:
 
-```json
-{"session_id":"studio-001","account_id":"demo-002","event_id":"1","text":""}
-```
+| Message | Agent behavior |
+| --- | --- |
+| `Hola` | Asks for a fictional ID |
+| `Mi cédula es 1000000001` | Requests the scenario verification code |
+| `verificar 1111` | Recovers customer history and the balance |
+| `quiero 3 cuotas desde 2026-10-20` | Presents an installment proposal |
+| `confirmo` | Saves one payment commitment |
 
-Keep the session and account IDs; change the event ID and text for each turn:
+Second fixture: `1000000002` with `verificar 2222`. Use fictional data only.
 
 ```mermaid
-flowchart LR
-    A["1: empty text"] --> B["2: verificar 2222"]
-    B --> C["3: pago 450000 mañana"]
-    C --> D["4: confirmo"]
-    A -.-> S[awaiting_identity]
-    B -.-> T[ready]
-    C -.-> U[awaiting_confirmation]
-    D -.-> V[agreed]
+flowchart TD
+    H[Human message in Studio Chat] --> I[Identify fictional customer]
+    I --> V[Verify identity]
+    V --> M[Recover customer history]
+    M --> S[Bounded factual summary]
+    S --> G[Resume collection workflow]
+    G --> A[Assistant message in Studio]
+    T[Studio thread and message IDs] -.-> G
 ```
 
-SQLite is the business source of truth; Studio manages development checkpoints.
-Use the four public input fields above, not internal state. The default database is
-`.local/collections.sqlite3`; independent scenarios need separate database files.
+Switch to **Graph** to inspect identity, memory, negotiation, and persistence nodes.
+No session, account, or event IDs need to be entered. Studio supplies transport IDs;
+the backend binds them to the verified customer and business conversation.
+
+Open another thread and verify the same fictional identity to recover its history and
+commitments. `¿Qué acordamos?` retrieves a factual summary after verification. Summaries
+show at most three conversations and three commitments; original records remain intact.
+This local summary uses no LLM. An ID alone never grants access to history.
+
+A returning thread resumes the existing business conversation, including its pending
+offer or terminal outcome; it does not initiate another outbound contact. New business
+sessions still pass the existing contact controls. SQLite holds business records and
+verified identity bindings; Studio holds message checkpoints. For independent scenarios,
+use a separate database (`COLLECTIONS_DATABASE_PATH`).
 
 ## Optional Haiku extraction
 
