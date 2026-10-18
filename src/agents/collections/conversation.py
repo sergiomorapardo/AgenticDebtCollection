@@ -89,7 +89,7 @@ def terminal_response(session, text):
         )
         return (
             prefix
-            + " Puedo retomar la simulación conservando el historial. Escribe continuemos si quieres seguir; no registraré ningún acuerdo por retomarla."
+            + " Puedo retomar la conversación conservando el historial. Escribe continuemos si quieres seguir; no registraré ningún acuerdo por retomarla."
         )
     prefix = "Lamento la mala experiencia. " if social_intent(text) == "complaint" else ""
     if not session.get("identity_verified"):
@@ -105,7 +105,7 @@ def terminal_response(session, text):
     if session["stage"] == "handoff":
         return (
             prefix
-            + "La gestión quedó en revisión humana simulada. No se contactó a un asesor real ni se registró un pago; no continuaré negociando en esta sesión."
+            + "Tu solicitud quedó registrada para revisión. No puedo transferirte a un asesor desde aquí; no se registró un pago ni continuaré negociando en esta conversación."
         )
     return (
         prefix

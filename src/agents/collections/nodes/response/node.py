@@ -20,7 +20,7 @@ def compose_response(state: State, runtime: Runtime[AppContext]) -> dict:
                 today=ctx.today,
             )
             session.update(stage="agreed", agreement_id=agreement_id)
-            text = f"Registré tu compromiso ficticio con referencia {agreement_id}. Esto es una promesa de pago: el saldo continúa pendiente hasta verificar un pago. Gracias."
+            text = f"Registré tu compromiso con referencia {agreement_id}. Esto es una promesa de pago: el saldo continúa pendiente hasta verificar un pago. Gracias."
         else:
             text = state["response_text"]
         if not text:

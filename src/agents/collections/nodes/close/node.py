@@ -8,5 +8,5 @@ def close_session(state: State) -> dict:
     session.update(stage="closed", pending_offer_id=None, close_reason="customer_request")
     return {
         "session": session,
-        "response_text": "Finalizo la simulación. No se ha registrado un nuevo compromiso ni realizado un pago.",
+        "response_text": "Entendido, cierro la conversación. No se ha registrado un nuevo compromiso ni realizado un pago.",
     }
