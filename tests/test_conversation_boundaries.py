@@ -210,7 +210,7 @@ def test_boundary_replies_preserve_scope_and_simulation_disclosures(conversation
         reply = send(text)["reply"]
         assert reply["wording_status"] == "deterministic"
         assert not reply["finished"]
-    assert "atención humana simulada" in send("¿qué pasó?")["reply"]["text"]
+    assert "solicitud de atención de un asesor" in send("¿qué pasó?")["reply"]["text"]
 
 
 @pytest.mark.parametrize("stop", ["terminar", "No me llames más, ¿entendido?"])
