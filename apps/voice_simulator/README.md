@@ -56,7 +56,9 @@ streaming tokens are not spoken. `mock` uses no LLM, but speech still consumes E
 **Opciones** contains typed input (Enter sends), audio file input (upload sends),
 audio retry, and conversation termination. The conversation transcript remains visible.
 
-The second fixture uses `1000000002` and code `2222`. The default demo clock remains
+The additional fictional ID `123456789` selects the same `demo-001` account as
+`1000000001`: verification code `1111`, initial balance COP 600,000. This is an alias,
+not a separate customer or debt. The second fixture uses `1000000002` and code `2222`. The default demo clock remains
 October 19, 2026, America/Bogota. A saved commitment never marks a debt as paid.
 
 ## Recovery and local state
@@ -83,5 +85,32 @@ do not prove that audio was audible or listened to without seeking. Continuous l
 barge-in, stronger playback tracking, authentication, and production telephony are planned.
 Streaming remains a TODO; each complete response is validated before speech generation.
 Only the audio and response text needed for speech are sent to ElevenLabs. Use fictional data.
+
+## Voice checks
+
+`uv sync --locked --extra voice` installs the optional simulator dependencies.
+`uv run --extra voice pytest -q tests/test_voice.py` uses fake audio and a mock HTTP
+transport: no paid calls. It covers request shape, redacted failures, automatic transcription/send,
+current-offer playback completion, stale events, TTS retries without duplicate agreements, session isolation,
+and Gradio construction. Existing workflow tests remain applicable.
+
+Live TTS was verified with the configured designed voice (HTTP 200, MP3) before PR #28.
+Live Scribe v2 transcribed a generated customer clip as `Quiero tres cuotas desde mañana`.
+In the earlier manual UI, Chrome typed identity turns followed by that transcript produced three COP 200,000
+installments. Confirmation without acknowledgement was rejected; after full playback and
+manual acknowledgement, exactly one unpaid commitment was found in SQLite. Transcribing
+the offer audio preserved its amounts and dates.
+
+Browser file upload automation was blocked by the Chrome extension's local-file permission;
+physical microphone capture was unavailable in that browser session. Those two UI input
+paths still need manual acceptance. STT was validated directly through the same adapter.
+The simplified UI was verified in Chrome using a cached speech test double (no additional
+provider credits): initial and subsequent response autoplay, Enter-to-send, pause keeping
+the reply control disabled, and audio-ended enabling the recorder. Offline tests exercise
+the recording callback, transcription failure, stale audio events, and retry gating.
+Physical microphone capture still requires manual acceptance. No automatic interruption
+or audibility claim is made. Keep live evidence under ignored
+`.validation/`.
+
 
 [Roadmap](../../docs/ROADMAP.md) · [Validation](../../docs/VALIDATION.md)
