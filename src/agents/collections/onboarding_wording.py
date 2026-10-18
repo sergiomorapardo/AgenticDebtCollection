@@ -45,9 +45,10 @@ does not repeat or merely paraphrase the last assistant reply or restart the ide
 Return false for any uncertainty. Output only the requested booleans."""
 
 
-def redact_dialogue(text):
+def redact_dialogue(text, *, max_length=600):
     text = re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", text)
-    return re.sub(r"\d+", "[number]", text)[:600]
+    redacted = re.sub(r"\d+", "[number]", text)
+    return redacted if max_length is None else redacted[:max_length]
 
 
 def contextual_reply(ctx, text, history, reference, paused, intent=None):
