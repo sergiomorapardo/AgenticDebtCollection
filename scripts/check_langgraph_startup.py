@@ -180,6 +180,22 @@ def check_conversation(client, base_url: str, database: Path, assistant_id: str)
         assert replay["messages"] == result["messages"], "Replay duplicated messages"
         return results
 
+    onboarding = conversation(
+        [
+            ("que hay", "awaiting_customer"),
+            ("no quiero hacer ni mierda", "awaiting_customer"),
+            ("que no quiero hacer nada", "awaiting_customer"),
+            ("les voy a opagar", "awaiting_customer"),
+            ("1000000001", "awaiting_identity"),
+            ("por qué necesitan verificar", "awaiting_identity"),
+            ("No me llames más, ¿entendido?", "closed"),
+        ]
+    )
+    assert len({item["reply"]["text"] for item in onboarding[:4]}) == 4
+    assert "No insistiré" in onboarding[1]["reply"]["text"]
+    assert "pausa" in onboarding[2]["reply"]["text"]
+    assert all("600,000" not in item["reply"]["text"] for item in onboarding)
+
     completed = conversation(
         [
             ("Hola", "awaiting_customer"),

@@ -13,7 +13,9 @@ from typing_extensions import TypedDict
 
 from agents.collections.chat_memory import ChatMemory, summarize_history
 from agents.collections.config import data_directory
+from agents.collections.conversation import requests_end
 from agents.collections.nodes.intake.tools import verify_demo_code
+from agents.collections.onboarding import onboarding_reply
 from agents.collections.runtime import resolve_context
 from agents.collections.state import State
 
@@ -88,16 +90,7 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
                 True,
             ),
         }
-    if not binding["verified"] and base["text"].casefold() in {
-        "terminar",
-        "adiós",
-        "adios",
-        "salir",
-        "no me llames",
-        "no me llamen",
-        "no quiero continuar",
-        "cuelga",
-    }:
+    if not binding["verified"] and requests_end(base["text"]):
         binding["closed"] = True
         response = memory.save_transition(
             base,
@@ -124,11 +117,12 @@ def identify_customer(state: ChatState, runtime: Runtime):
     candidates = re.findall(r"(?<!\d)\d{10}(?!\d)", state["text"])
     account = customers.get(candidates[0]) if len(candidates) == 1 else None
     if account is None:
-        return {
-            "chat_reply": reply(
-                "Hola, soy el asistente automatizado de una fintech ficticia. Para empezar, dime tu cédula ficticia de la demo (1000000001 o 1000000002). No uses datos personales reales."
+        if candidates:
+            response = reply(
+                "Esa identificación no corresponde a la demo. Usa solo 1000000001 o 1000000002; no ingreses datos reales."
             )
-        }
+            return {"chat_reply": response}
+        return respond_onboarding(state, runtime)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
         binding["account_id"] = account
@@ -143,7 +137,18 @@ def identify_customer(state: ChatState, runtime: Runtime):
     return {"account_id": account, "chat_reply": response}
 
 
+def respond_onboarding(state: ChatState, runtime: Runtime):
+    ctx = resolve_context(runtime)
+    memory = ChatMemory(ctx.repository)
+    binding, response = onboarding_reply(state["text"], memory.binding(state["chat_thread"]), ctx)
+    response = memory.save_transition(state, binding, response)
+    return {"chat_route": "assistant_message", "chat_reply": response}
+
+
 def verify_identity(state: ChatState, runtime: Runtime):
+    # Only an actual verification submission consumes a verification attempt.
+    if not re.fullmatch(r"verificar(?:\s+\d+)?|\d{4}", state["text"], re.IGNORECASE | re.DOTALL):
+        return respond_onboarding(state, runtime)
     memory = ChatMemory(resolve_context(runtime).repository)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
