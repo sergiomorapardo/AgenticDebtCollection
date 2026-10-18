@@ -124,15 +124,30 @@ flowchart TD
     D -->|Decline| P[Pause; stop requesting data]
     D -->|Willing to continue| R[Explain the pending identity step]
     D -->|Complaint or question| A[Acknowledge or explain scope]
-    P --> N[Next human message]
-    R --> N
-    A --> N
+    P --> W[Draft contextual response]
+    R --> W
+    A --> W
+    W --> Q{Review meaning and repetition}
+    Q -->|Accept| N[Append identity help only when appropriate; reply]
+    Q -->|Reject once| W
+    Q -->|Second rejection or provider error| F[Safe reference with visible status]
+    F --> N
     N --> U
     V -->|Verified| H[Access account history and negotiate]
 ```
 
 Pause is stored per thread and survives restarts; only explicit stop closes onboarding.
-Ordinary conversation never consumes verification attempts. Haiku classifies the current
-message with numbers redacted; it receives no account history and cannot verify identity,
-register a payment, or accept an agreement. Responses preserve the simulation boundary.
-Provider failures are visible as `interpretation_status=model_error` and allow retry.
+Ordinary conversation never consumes verification attempts. Haiku classifies and drafts using
+only the current message and up to four recent pre-verification exchanges from this thread.
+Numbers, emails and URLs are redacted, and each message is capped at 600 characters; this
+is bounded demo context, not a guarantee of complete anonymization. Account history is excluded.
+
+A second model call reviews relevance, scope, pause, unsupported claims and repetition.
+Drafting has at most two attempts per turn; rejected output or provider errors use the safe
+reference. `wording_status` and `wording_attempts` expose the result. These calls run inside
+the onboarding node; they are not additional nodes on the Studio graph.
+
+The backend appends exact synthetic identification instructions only on the initial greeting,
+when the person wants to proceed, or when explicitly asked how to identify. The model cannot
+verify identity, register payments, or accept agreements. Pause, bounded dialogue and the
+response persist atomically; replay never adds another history entry.
