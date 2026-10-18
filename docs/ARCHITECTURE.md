@@ -1,59 +1,135 @@
-# Arquitectura de la etapa por texto
+# Architecture
 
-## Orquestación
+One LangGraph workflow processes **one turn per invocation**. Code routes the turn; an optional
+LLM extracts intent. There is no multi-agent supervisor or parallel model fan-out.
 
-Un StateGraph organiza intake → interpret → rama de negocio → response → END.
-Intake recupera estado desde SQLite, limita el contacto inicial y verifica identidad ficticia.
-Intent enruta a promise, negotiation, confirmation, handoff, close o response.
-Confirmation admite commitment solo con una oferta presentada y vigente.
-Cada invocación procesa un turno y termina; nunca espera dentro del proceso a que hable el usuario.
+## The implemented graph
 
-El modelo extrae intención y términos, sin decidir elegibilidad ni calcular calendarios.
-El proveedor mock permite pruebas sin red; Anthropic usa Haiku y salida estructurada.
-Las respuestas financieras son plantillas deterministas para mantener cifras/fechas verificables.
-No se utiliza un supervisor multiagente ni un evaluador LLM en el camino de cada turno.
+Node names and edges match [agent.py](../src/agents/collections/agent.py).
+Solid arrows are fixed edges; dashed arrows are conditional routes.
 
-## Persistencia
+```mermaid
+flowchart TD
+    START([START]) --> intake
+    intake -.-> interpret
+    intake -.-> response
+    intake -.-> close
+    interpret -.-> promise
+    interpret -.-> negotiation
+    interpret -.-> confirmation
+    interpret -.-> handoff
+    interpret -.-> close
+    interpret -.-> response
+    confirmation -.-> commitment
+    confirmation -.-> response
+    promise --> response
+    negotiation --> response
+    commitment --> response
+    handoff --> response
+    close --> response
+    response --> END([END])
+```
 
-SQLite conserva cuentas, sesiones, ofertas, contactos, acuerdos y eventos. Los saldos provienen
-siempre del repositorio, no del historial. Cada oferta identifica términos, versiones y política.
-Los acuerdos son promesas: no reducen saldo ni acreditan pagos. No hay pasarela de pagos.
+Generate the current graph directly from code with `uv run collections-lab graph`.
+The next customer message starts a new invocation using the same persisted session.
 
-El nodo commitment solicita la escritura. Response revalida y guarda acuerdo, estado y resultado
-del evento en una sola transacción antes de entregar la respuesta, también al invocar desde Studio.
-ConversationService serializa el turno completo para simplificar la demo; Studio usa versiones
-optimistas de sesión y transacciones al finalizar. Staging necesitará concurrencia por sesión.
-La clave (session_id,event_id) identifica reintentos; cambia el contenido con esa clave y falla.
+## Interpretation and policy
 
-Un cambio de saldo/política invalida la oferta. Una respuesta ambigua después de una oferta la
-invalida y exige una nueva presentación. Se limitan turnos, intentos de identidad y propuestas.
-Una caída de persistencia revierte escrituras y no entrega un mensaje de registro exitoso.
-Un error del proveedor devuelve una respuesta neutral sin cambiar a otro proveedor/modelo.
+```mermaid
+flowchart LR
+    T[Verified customer text] --> P{Configured provider}
+    P -->|mock| M[Offline parser]
+    P -->|anthropic| H[Claude Haiku API]
+    M --> I[Structured intent and proposed terms]
+    H --> I
+    I --> C[Code validates policy and computes dates / COP]
+    C --> R[Deterministic reply template]
+    classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
+    class T,P,M,I,C,R local
+    class H paid
+```
 
-La entrada validada TurnRequest admite session_id, event_id, account_id y text. No permite
-identity_verified, saldo ni agreement_id. Las sesiones/identidades siguen siendo de desarrollo:
-conocer un session_id no constituye autenticación. Nunca exponer esta interfaz a clientes reales.
+| Code owns | Demo rule |
+| --- | --- |
+| Initial contact | Authorized `phone_simulation` channel; Colombia calendar; contact history |
+| Contact window | Mon–Fri 07:00–19:00; Sat 08:00–15:00; end excluded; Sundays/holidays blocked |
+| Contact frequency | At most one established contact per day; no alternate channels in the same week |
+| Identity | Fixture code before disclosing the balance; three failed attempts close the session |
+| Payment terms | `demo-co-v1`: 1–3 monthly installments; first date today through today + 7 days |
+| Money | Integer COP; preserve the total; adjust month-end dates; no discounts or added charges |
+| Turn limits | Bounded clarifications/proposals; handoff after 20 persisted turns |
 
-## Colombia y política ficticia
+These are implemented demo controls, not a certification of legal compliance. The model cannot
+authorize an exception, change the balance, or record a payment.
 
-Canal sintético phone_simulation autorizado mediante fixture. Reloj explícito America/Bogota.
-Controles implementados: lunes-viernes 07:00–19:00 y sábado 08:00–15:00 (fin excluido), domingos
- y festivos bloqueados; contacto establecido máximo una vez por día, y sin varios canales en la
-misma semana. No se pregunta por el motivo del incumplimiento; se consultan alternativas.
-No se implementan excepciones horarias: cualquier caso fuera de la regla general se bloquea.
-Referencia: https://gestornormativo.creg.gov.co/gestor/entorno/docs/ley_2300_2023.htm
-Estos controles parciales no sustituyen revisión normativa/de datos previa a un piloto real.
+## Confirmation and persistence
 
-Política demo-co-v1: saldo fijo, primera fecha entre hoy y siete días, hasta tres cuotas mensuales,
-sin descuentos/cargos. Se usan COP enteros, se distribuyen restos y se ajusta fin de mes. Los
-importes, fechas y condición de simulación siempre se presentan antes de pedir confirmación.
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant Graph as LangGraph nodes
+    participant Store as SQLite
+    Customer->>Graph: Confirm the previously presented offer
+    Graph->>Graph: confirmation revalidates the presented offer
+    alt Offer already stale or invalid
+        Graph->>Store: response persists invalidation and turn, no agreement
+        Graph-->>Customer: New proposal and confirmation required
+    else Offer valid at confirmation
+        Graph->>Graph: commitment requests a write
+        Note over Graph,Store: response finalizes in one transaction
+        Graph->>Store: Revalidate persisted offer, identity, balance, and policy
+        alt Still valid and storage succeeds
+            Graph->>Store: Save agreement, session, and event result atomically
+            Store-->>Graph: Commit succeeds
+            Graph-->>Customer: Commitment recorded
+        else Late revalidation or persistence failure
+            Store-->>Graph: Roll back writes, propagate error
+            Note over Customer,Graph: No successful registration reply
+        end
+    end
+```
 
-## Evolución del canal
+`ConversationService` serializes the entire local turn in a transaction. Direct Studio execution
+uses optimistic session revisions and a transaction at finalization. Staging needs concurrency
+validation against its external storage adapter.
 
-Gradio consumirá el mismo workflow y session_id. Transcripción y TTS quedarán fuera del motor
-financiero. Primero conversación por turnos, después streaming, detección de pausas e interrupciones.
-Generar una oferta no equivaldrá a haberla reproducido; el canal reportará qué audio se escuchó.
-Esta funcionalidad de voz y los proveedores STT/TTS aún no están implementados.
+SQLite stores accounts, sessions, offers, agreements, events, and contacts.
+**Agreements are promises: the account balance stays unchanged.**
 
-El siguiente despliegue será staging con simulador web antes de conectar Amazon Connect/Lex.
-No hay AWS provisionado ni llamadas, mensajes o contactos a terceros en este repositorio.
+## Retries and trusted state
+
+```mermaid
+flowchart TD
+    T[Incoming turn] --> K{"Existing session_id + event_id?"}
+    K -->|No| G[Process against persisted session and account]
+    K -->|Yes| C{Same request content?}
+    C -->|Yes| R[Return cached reply; no duplicate agreement]
+    C -->|No| E[Reject conflicting event]
+    G --> W[Persist turn atomically]
+```
+
+Only `session_id`, `event_id`, `account_id`, and `text` are public input. The session is bound to
+its account; identity, balance, and agreement IDs come from trusted storage. Session IDs alone
+are not authentication. Closed, handed-off, and agreed sessions cannot reopen.
+
+| Situation | Outcome |
+| --- | --- |
+| Unclear or rejected offer | Invalidate it; require newly presented terms before confirmation |
+| Changed balance or policy | Invalidate old terms; require a new proposal and confirmation |
+| Reported payment or dispute | Simulated handoff; no payment posting |
+| Provider error | Neutral reply; no automatic provider/model switch |
+
+## Channel boundaries
+
+```mermaid
+flowchart LR
+    C[CLI today] --> T[Turn input]
+    S[Studio today] --> T
+    V[Voice simulator: planned] -. Transcribed text .-> T
+    T --> G[Same collections workflow]
+    G --> R[Validated reply]
+    R -. Planned TTS .-> A[Browser speaker]
+```
+
+Voice, authentication, external persistence, and AWS are future work. See the [roadmap](ROADMAP.md).
