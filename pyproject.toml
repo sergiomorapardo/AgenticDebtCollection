@@ -1,7 +1,7 @@
 [project]
-name = "cobranza-agent-lab"
+name = "agentic-debt-collection"
 version = "0.1.0"
-description = "Laboratorio de cobranza para Colombia con LangGraph y simulación de voz"
+description = "A conversational debt collection agent that negotiates payment plans and tracks payment commitments"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "holidays>=0.80,<1",
