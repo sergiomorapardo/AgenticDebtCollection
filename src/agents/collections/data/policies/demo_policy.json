@@ -1,0 +1,12 @@
+{
+  "policy_version": "demo-co-v1",
+  "synthetic": true,
+  "currency": "COP",
+  "max_installments": 3,
+  "first_payment_within_days": 7,
+  "installment_frequency": "monthly",
+  "additional_charges_cop": 0,
+  "discounts_allowed": false,
+  "explicit_confirmation_required": true,
+  "exceptions_require_human": true
+}
