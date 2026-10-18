@@ -17,11 +17,62 @@ from agents.collections.routes.intent.agent import route_intent
 from agents.collections.state import InputState, State
 
 
-def build_graph():
+def build_graph(*, studio=False, checkpointer=None):
     """Construye el workflow sin credenciales, red ni efectos de negocio."""
     # Las dependencias Python se inyectan al invocar; no son contexto JSON público.
-    builder = StateGraph(State, input_schema=InputState)
-    builder.add_node("intake", prepare_turn)
+    if studio:
+        from agents.collections.chat import (
+            ChatInput,
+            ChatState,
+            assistant_message,
+            human_input,
+            identify_customer,
+            recover_history,
+            studio_intake,
+            verify_identity,
+        )
+
+        builder = StateGraph(ChatState, input_schema=ChatInput)
+        for name, node in {
+            "human_input": human_input,
+            "identify_customer": identify_customer,
+            "verify_identity": verify_identity,
+            "recover_history": recover_history,
+            "assistant_message": assistant_message,
+        }.items():
+            builder.add_node(name, node)
+        builder.add_edge(START, "human_input")
+        builder.add_conditional_edges(
+            "human_input",
+            lambda state: state["chat_route"],
+            {
+                name: name
+                for name in (
+                    "identify_customer",
+                    "verify_identity",
+                    "recover_history",
+                    "intake",
+                    "assistant_message",
+                )
+            },
+        )
+        builder.add_edge("identify_customer", "assistant_message")
+        for name in ("verify_identity", "recover_history"):
+            destinations = (
+                ("recover_history", "assistant_message")
+                if name == "verify_identity"
+                else ("intake", "assistant_message")
+            )
+            builder.add_conditional_edges(
+                name, lambda state: state["chat_route"], {target: target for target in destinations}
+            )
+        builder.add_edge("response", "assistant_message")
+        builder.add_edge("assistant_message", END)
+    else:
+        builder = StateGraph(State, input_schema=InputState)
+        builder.add_edge(START, "intake")
+        builder.add_edge("response", END)
+    builder.add_node("intake", studio_intake if studio else prepare_turn)
     builder.add_node("interpret", interpret_turn)
     builder.add_node("promise", prepare_promise)
     builder.add_node("negotiation", prepare_payment_plans)
@@ -30,7 +81,6 @@ def build_graph():
     builder.add_node("handoff", prepare_handoff)
     builder.add_node("response", compose_response)
     builder.add_node("close", close_session)
-    builder.add_edge(START, "intake")
     builder.add_conditional_edges(
         "intake",
         route_after_intake,
@@ -62,9 +112,8 @@ def build_graph():
     )
     for name in ("promise", "negotiation", "commitment", "handoff", "close"):
         builder.add_edge(name, "response")
-    builder.add_edge("response", END)
     # Studio administra checkpoints; el adaptador CLI persistente pertenece a la etapa 1.
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
 agent = build_graph()
