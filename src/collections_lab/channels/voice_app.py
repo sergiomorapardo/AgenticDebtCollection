@@ -1,4 +1,4 @@
-"""Local Gradio voice simulator. No public sharing or telephone calls."""
+"""Local Gradio voice simulator with automatic transcription, sending, and playback."""
 
 import argparse
 import os
@@ -20,28 +20,45 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
 
     def get_session(identifier):
         if identifier not in sessions:
-            raise gr.Error("Inicia una sesión. Si expiró, recarga la página.")
+            raise gr.Error("La sesión expiró. Recarga la página e inicia una conversación.")
         return sessions[identifier]
 
-    def render(session):
+    def ready(session):
+        if session.reply["finished"]:
+            return False
+        if session.audio:
+            return session.played_audio == session.audio
+        return session.reply["stage"] != "awaiting_confirmation"
+
+    def render(session, *, replace_audio=True, error=None):
         finished = session.reply["finished"]
-        pending = session.reply["stage"] == "awaiting_confirmation" and not finished
+        can_respond = ready(session)
+        message = (
+            error
+            or session.warning
+            or (
+                "Conversación terminada. Puedes iniciar otra."
+                if finished
+                else "Tu turno: graba tu respuesta y detén la grabación para enviarla."
+                if can_respond
+                else "Escucha al agente. Si no suena automáticamente, pulsa reproducir."
+            )
+        )
         return (
             list(session.history),
-            session.audio,
+            gr.update(value=session.audio, visible=True) if replace_audio else gr.skip(),
             session.details(),
-            session.warning or "Turno listo. Puedes reproducir el audio.",
-            gr.update(value=False, visible=pending),
-            gr.update(interactive=finished),
+            message,
+            gr.update(visible=finished, value="Iniciar otra conversación"),
+            gr.update(value=None, visible=can_respond, interactive=True),
             gr.update(interactive=not finished),
-            gr.update(interactive=not finished),
-            "",
-            None,
+            gr.update(value="", interactive=can_respond),
+            gr.update(value=None, interactive=can_respond),
         )
 
     def start(identifier):
         if identifier in sessions and not sessions[identifier].reply["finished"]:
-            raise gr.Error("Termina la sesión actual antes de iniciar otra.")
+            raise gr.Error("Termina la conversación actual antes de iniciar otra.")
         identifier = uuid4().hex
         directory = data_dir / identifier
         context = AppContext(
@@ -52,23 +69,29 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
         sessions[identifier] = session
         return (identifier, *render(session))
 
-    def transcribe(identifier, recording):
+    def respond(identifier, recording):
         session = get_session(identifier)
-        if not recording:
-            raise gr.Error("Graba o carga un audio primero.")
         try:
-            text = session.transcribe(recording)
-            return text, session.details(), "Revisa la transcripción y pulsa Enviar turno."
-        except SpeechError as error:
-            raise gr.Error(str(error)) from None
+            if not recording:
+                raise ValueError("No se recibió audio. Graba de nuevo o escribe en Opciones.")
+            session.respond_to_audio(recording)
+        except (SpeechError, ValueError) as error:
+            return render(session, replace_audio=False, error=str(error))
+        return render(session)
 
-    def send(identifier, text, heard):
+    def send(identifier, text):
         session = get_session(identifier)
         try:
-            session.send(text, heard_offer=heard)
+            session.send(text)
         except ValueError as error:
             raise gr.Error(str(error)) from None
         return render(session)
+
+    def playback_finished(identifier, audio_path):
+        session = get_session(identifier)
+        if not session.acknowledge_playback(audio_path):
+            return tuple(gr.skip() for _ in outputs)
+        return render(session, replace_audio=False)
 
     def end(identifier):
         session = get_session(identifier)
@@ -78,67 +101,79 @@ def create_app(speech, *, data_dir: Path, provider="mock", model="claude-haiku-4
     def retry(identifier):
         session = get_session(identifier)
         session.retry_audio()
-        return session.audio, session.warning or "Audio listo.", session.details(), False
+        return render(session)
 
     with gr.Blocks(title="Simulador de voz · Cobranza", analytics_enabled=False) as app:
         identifier = gr.State(
             None, time_to_live=3600, delete_callback=lambda key: sessions.pop(key, None)
         )
         gr.Markdown(
-            "# Simulador de voz\n"
-            "Demo con datos ficticios, por turnos y sin llamadas telefónicas. "
-            "El audio se envía a ElevenLabs y consume créditos.\n\n"
-            f"**Conversación:** {provider} · **Reloj de demo:** {now.isoformat()}\n\n"
-            "Prueba: `Hola` → `Mi cédula es 1000000001` → `verificar 1111` → "
-            "`quiero 3 cuotas desde 2026-10-20` → `confirmo`. "
-            "Segunda cuenta: `1000000002`, código `2222`. Usa solo datos ficticios."
+            "# Hablemos\n"
+            "Escucha al agente y graba tu respuesta. Al detener la grabación, se envía sola.\n\n"
+            "Demo con datos ficticios. El audio se envía a ElevenLabs y consume créditos."
         )
-        with gr.Row():
-            start_button = gr.Button("Iniciar sesión", variant="primary")
-            end_button = gr.Button("Terminar sesión", interactive=False)
-        history = gr.Chatbot(label="Conversación", height=330)
-        with gr.Row():
-            recording = gr.Audio(
-                sources=["microphone", "upload"], type="filepath", label="Tu mensaje"
-            )
-            audio = gr.Audio(label="Respuesta del agente", autoplay=False, interactive=False)
-        transcribe_button = gr.Button("Transcribir audio")
-        text = gr.Textbox(
-            label="Transcripción / mensaje",
-            placeholder="Revisa el texto antes de enviarlo.",
-            lines=2,
-        )
-        heard = gr.Checkbox(
-            label="Escuché completa esta oferta, incluidos montos y fechas",
-            value=False,
+        start_button = gr.Button("Iniciar conversación", variant="primary")
+        status = gr.Markdown("Inicia la conversación para escuchar el saludo del agente.")
+        audio = gr.Audio(
+            label="Agente",
+            autoplay=True,
+            interactive=False,
+            type="filepath",
             visible=False,
+            buttons=[],
         )
-        send_button = gr.Button("Enviar turno", variant="primary", interactive=False)
-        retry_button = gr.Button("Reintentar audio")
-        status = gr.Markdown(
-            "Inicia una sesión para comenzar. Cada nueva sesión usa una base de datos aislada."
+        recording = gr.Audio(
+            sources=["microphone"],
+            type="filepath",
+            label="Responder",
+            visible=False,
+            interactive=True,
+            editable=False,
+            buttons=[],
         )
-        details = gr.JSON(label="Estado y latencia")
+        history = gr.Chatbot(label="Conversación", height=300, buttons=[])
+        with gr.Accordion("Opciones · escribir, cargar audio o terminar", open=False):
+            text = gr.Textbox(
+                label="Responder por escrito",
+                placeholder="Escribe y pulsa Enter",
+                interactive=False,
+            )
+            upload = gr.Audio(
+                sources=["upload"],
+                type="filepath",
+                label="Cargar y enviar audio",
+                interactive=False,
+                editable=False,
+                buttons=[],
+            )
+            with gr.Row():
+                retry_button = gr.Button("Reintentar audio del agente")
+                end_button = gr.Button("Terminar conversación", interactive=False)
+            gr.Markdown(
+                "Datos de prueba: cédula `1000000001`, código `1111`. "
+                "Puedes pedir `quiero 3 cuotas desde 2026-10-20` y luego `confirmo`.\n\n"
+                f"Conversación: `{provider}` · Reloj de demo: `{now.isoformat()}`"
+            )
+            details = gr.JSON(label="Estado y latencia")
         outputs = [
             history,
             audio,
             details,
             status,
-            heard,
             start_button,
-            send_button,
+            recording,
             end_button,
             text,
-            recording,
+            upload,
         ]
         events = {"api_visibility": "private", "concurrency_id": "voice", "concurrency_limit": 1}
         start_button.click(start, [identifier], [identifier, *outputs], **events)
-        transcribe_button.click(
-            transcribe, [identifier, recording], [text, details, status], **events
-        )
-        send_button.click(send, [identifier, text, heard], outputs, **events)
+        recording.stop_recording(respond, [identifier, recording], outputs, **events)
+        upload.upload(respond, [identifier, upload], outputs, **events)
+        text.submit(send, [identifier, text], outputs, **events)
+        audio.stop(playback_finished, [identifier, audio], outputs, **events)
         end_button.click(end, [identifier], outputs, **events)
-        retry_button.click(retry, [identifier], [audio, status, details, heard], **events)
+        retry_button.click(retry, [identifier], outputs, **events)
     return app
 
 
@@ -152,7 +187,6 @@ def main():
     speech = ElevenLabsSpeech(
         os.getenv("ELEVENLABS_API_KEY", ""), os.getenv("ELEVENLABS_VOICE_ID", "")
     )
-    # Reviewed wording reaches speech; speculative token streaming is not spoken.
     app = create_app(
         speech,
         data_dir=args.data_dir,

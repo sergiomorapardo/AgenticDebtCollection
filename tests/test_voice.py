@@ -1,4 +1,4 @@
-"""Verify the local voice channel offline: transport, persistence, and acknowledgement."""
+"""Verify the local voice channel offline: transport, persistence, and playback gating."""
 
 import json
 import socket
@@ -80,6 +80,7 @@ class FakeSpeech:
     def __init__(self):
         self.fail = False
         self.calls = []
+        self.transcriptions = []
 
     def synthesize(self, text):
         self.calls.append(text)
@@ -88,6 +89,7 @@ class FakeSpeech:
         return b"ID3-demo"
 
     def transcribe(self, path):
+        self.transcriptions.append(path)
         return "confirmo"
 
 
@@ -120,23 +122,25 @@ def test_confirmation_requires_acknowledgement_for_current_offer(session):
     proposal = offer(session)
     assert session.transcribe("synthetic.wav") == "confirmo"
     assert not session.context.repository.agreements()  # STT never runs the graph.
-    with pytest.raises(ValueError, match="Escucha completa"):
+    with pytest.raises(ValueError, match="Espera a que termine"):
         session.send("confirmo")
     assert not session.context.repository.agreements()
-    assert session.send("confirmo", heard_offer=True)["stage"] == "agreed"
+    assert session.acknowledge_playback(session.audio)
+    assert session.respond_to_audio("synthetic.wav")["stage"] == "agreed"
     assert len(session.context.repository.agreements()) == 1
     assert session.context.repository.get_account("demo-001").balance_cop == 600000
     evidence = json.loads((session.directory / "playback-acknowledgements.jsonl").read_text())
     assert evidence["offer_id"] == proposal["offer_id"]
     with pytest.raises(ValueError, match="terminó"):
-        session.send("confirmo", heard_offer=True)
+        session.send("confirmo")
     assert len(session.context.repository.agreements()) == 1
 
 
 def test_audio_failure_preserves_turn_and_retry_does_not_repeat_business_write(session):
     offer(session)
     session.speech.fail = True
-    session.send("confirmo", heard_offer=True)
+    session.acknowledge_playback(session.audio)
+    session.send("confirmo")
     assert len(session.context.repository.agreements()) == 1
     assert session.audio is None
     assert "turno ya está guardado" in session.warning
@@ -153,17 +157,20 @@ def test_failed_offer_audio_cannot_be_acknowledged_but_can_be_ended(session):
     session.send("1111")
     session.speech.fail = True
     session.send("quiero 3 cuotas desde 2026-10-20")
-    with pytest.raises(ValueError, match="Escucha completa"):
-        session.send("confirmo", heard_offer=True)
+    with pytest.raises(ValueError, match="Espera a que termine"):
+        session.send("confirmo")
     assert session.send("terminar")["finished"]
     assert not session.context.repository.agreements()
 
 
 def test_acknowledgement_does_not_carry_over_to_a_changed_offer(session):
     first = offer(session)
-    second = session.send("quiero 2 cuotas desde 2026-10-21", heard_offer=True)
+    previous_audio = session.audio
+    session.acknowledge_playback(previous_audio)
+    second = session.send("quiero 2 cuotas desde 2026-10-21")
+    assert not session.acknowledge_playback(previous_audio)
     assert first["offer_id"] != second["offer_id"]
-    with pytest.raises(ValueError, match="Escucha completa"):
+    with pytest.raises(ValueError, match="Espera a que termine"):
         session.send("confirmo")
     assert not session.context.repository.agreements()
 
@@ -183,4 +190,46 @@ def test_gradio_app_constructs_without_network_or_speech_calls(session, tmp_path
     app = create_app(session.speech, data_dir=tmp_path, now=session.context.now)
     assert app.title == "Simulador de voz · Cobranza"
     assert not session.speech.calls
-    assert len(app.config["dependencies"]) == 5
+    handlers = {function.name: function.fn for function in app.fns.values()}
+    identifier, *view = handlers["start"](None)
+    assert len(session.speech.calls) == 1
+    audio_path = view[1]["value"]
+    assert not view[5]["visible"]  # Reply control waits for the response to finish.
+    completed = handlers["playback_finished"](identifier, audio_path)
+    assert completed[5]["visible"]
+    responded = handlers["respond"](identifier, "synthetic.wav")
+    assert session.speech.transcriptions == ["synthetic.wav"]
+    assert len(responded[0]) == 4
+    assert not responded[5]["visible"]
+    assert responded[1]["value"] != audio_path
+    stale = handlers["playback_finished"](identifier, audio_path)
+    assert all(update == {"__type__": "update"} for update in stale)
+
+
+def test_retry_and_stale_playback_do_not_unlock_new_offer_audio(session):
+    offer(session)
+    previous_audio = session.audio
+    assert session.acknowledge_playback(previous_audio)
+    session.retry_audio()
+    assert not session.acknowledge_playback(previous_audio)
+    with pytest.raises(ValueError, match="Espera a que termine"):
+        session.respond_to_audio("blocked.wav")
+    assert not session.speech.transcriptions
+    assert not session.context.repository.agreements()
+    assert session.acknowledge_playback(session.audio)
+    session.respond_to_audio("confirm.wav")
+    assert len(session.context.repository.agreements()) == 1
+
+
+def test_transcription_failure_never_advances_the_business_turn(session, monkeypatch):
+    session.send("Hola")
+    history = list(session.history)
+
+    def fail(path):
+        raise SpeechError("No se detectó voz")
+
+    monkeypatch.setattr(session.speech, "transcribe", fail)
+    with pytest.raises(SpeechError):
+        session.respond_to_audio("empty.wav")
+    assert session.history == history
+    assert len(session.speech.calls) == 1

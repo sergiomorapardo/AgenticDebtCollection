@@ -1,4 +1,4 @@
-"""Manual voice turns around the existing graph, with explicit offer acknowledgement."""
+"""Voice turns around the existing graph, gated by current-offer playback completion."""
 
 import json
 from pathlib import Path
@@ -24,6 +24,7 @@ class VoiceSession:
         self.history = []
         self.reply = None
         self.audio = None
+        self.played_audio = None
         self.warning = ""
         self.latencies = {}
         self._lock = RLock()
@@ -35,34 +36,54 @@ class VoiceSession:
             self.latencies["stt_seconds"] = round(perf_counter() - started, 3)
             return text
 
-    def send(self, text: str, *, heard_offer=False):
+    def acknowledge_playback(self, audio_path):
+        """Accept the browser ended event only for the current generated audio file."""
+        with self._lock:
+            if not audio_path or not self.audio or Path(audio_path).name != Path(self.audio).name:
+                return False
+            if self.played_audio == self.audio:
+                return False
+            self.played_audio = self.audio
+            with (self.directory / "playback-acknowledgements.jsonl").open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "thread_id": self.thread_id,
+                            "message_id": self.reply.get("message_id"),
+                            "offer_id": self.reply.get("offer_id"),
+                            "audio": Path(self.audio).name,
+                            "method": "browser_audio_ended",
+                        }
+                    )
+                    + "\n"
+                )
+            return True
+
+    def check_turn(self, text=""):
+        if self.reply and self.reply["finished"]:
+            raise ValueError("Esta sesión terminó. Inicia una nueva conversación.")
+        pending = self.reply and self.reply["stage"] == "awaiting_confirmation"
+        if (
+            pending
+            and not requests_end(text)
+            and (not self.audio or self.played_audio != self.audio)
+        ):
+            raise ValueError(
+                "Espera a que termine la oferta antes de responder. "
+                "Si no suena, pulsa reproducir; si falló, reintenta el audio en Opciones."
+            )
+
+    def respond_to_audio(self, path):
+        with self._lock:
+            self.check_turn()  # Do not spend transcription credits on a blocked turn.
+            return self.send(self.transcribe(path))
+
+    def send(self, text: str):
         with self._lock:
             text = text.strip()
             if not text or len(text) > 4000:
-                raise ValueError("Escribe o transcribe un mensaje de entre 1 y 4000 caracteres.")
-            if self.reply and self.reply["finished"]:
-                raise ValueError("Esta sesión terminó. Inicia una nueva simulación.")
-            pending = self.reply and self.reply["stage"] == "awaiting_confirmation"
-            if pending and not requests_end(text):
-                if not self.audio or not heard_offer:
-                    raise ValueError(
-                        "Escucha completa la oferta y marca la casilla antes de continuar. "
-                        "Si el audio falló, reinténtalo. Siempre puedes terminar la sesión."
-                    )
-                # Bind the acknowledgement to this exact reply, not to a future offer.
-                with (self.directory / "playback-acknowledgements.jsonl").open("a") as stream:
-                    stream.write(
-                        json.dumps(
-                            {
-                                "thread_id": self.thread_id,
-                                "message_id": self.reply.get("message_id"),
-                                "offer_id": self.reply.get("offer_id"),
-                                "audio": Path(self.audio).name,
-                                "method": "manual_full_offer_acknowledgement",
-                            }
-                        )
-                        + "\n"
-                    )
+                raise ValueError("Escribe o graba un mensaje de entre 1 y 4000 caracteres.")
+            self.check_turn(text)
             started = perf_counter()
             with self.context.repository.connection():
                 result = self.graph.invoke(
@@ -87,6 +108,7 @@ class VoiceSession:
             if self.reply is None:
                 raise ValueError("Inicia una sesión primero.")
             self.audio = None
+            self.played_audio = None
             self.warning = ""
             started = perf_counter()
             try:
@@ -107,5 +129,5 @@ class VoiceSession:
             "offer_id": self.reply.get("offer_id") if self.reply else None,
             "agreement_id": self.reply.get("agreement_id") if self.reply else None,
             "latency": dict(self.latencies),
-            "playback_check": "manual acknowledgement; no automatic audibility verification",
+            "playback_check": "browser ended event; no audibility verification",
         }
