@@ -11,6 +11,9 @@ dependencies = [
   "python-dotenv>=1.2.3,<2",
 ]
 
+[project.scripts]
+collections-lab = "agents.collections.__main__:main"
+
 [dependency-groups]
 dev = [
   "langgraph-cli[inmem]>=0.4.31,<0.5",
