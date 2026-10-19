@@ -425,3 +425,16 @@ def test_reopened_studio_menu_waits_for_a_choice_without_repeating(
     assert proposal["reply"]["stage"] == "awaiting_confirmation"
     assert "200,000 COP" in proposal["reply"]["text"]
     assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize("text", ["ok, gracias", "dale, gracias", "gracias, hasta luego"])
+def test_polite_closure_acknowledgement_does_not_reopen(refused_conversation, monkeypatch, text):
+    send, ctx, session_id = refused_conversation
+    captured = []
+    model_stub(monkeypatch, {"intent": "unclear"}, captured)
+    ctx.provider = "anthropic"
+    result = send(text, "acknowledge-closure")
+    assert len(captured) == 1
+    assert result["reply"]["stage"] == "closed"
+    assert ctx.repository.get_session(session_id)["close_reason"] == "repeated_refusal"
+    assert not ctx.repository.agreements()
