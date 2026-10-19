@@ -83,7 +83,7 @@ def test_natural_continuation_resumes_only_the_conversation(continuation, answer
 def test_real_provider_interprets_paraphrase_with_context_not_allowlist(continuation, monkeypatch):
     send, ctx, session_id = continuation
     captured = []
-    model_stub(monkeypatch, {"intent": "resume"}, captured)
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
     ctx.provider = "anthropic"
     result = send("bueno, cuéntame qué opciones tengo entonces", "resume")
     assert result["reply"]["stage"] == "ready"
@@ -101,40 +101,53 @@ def test_real_provider_interprets_paraphrase_with_context_not_allowlist(continua
 )
 def test_ambiguous_or_failed_interpretation_never_resumes(continuation, monkeypatch, result):
     send, ctx, session_id = continuation
-    model_stub(monkeypatch, result, [])
+    captured = []
+    model_stub(monkeypatch, result, captured)
     ctx.provider = "anthropic"
     response = send("¿qué pasa si digo sigue?", "ambiguous")
     assert response["reply"]["stage"] == "closed"
     assert ctx.repository.get_session(session_id).get("recovered_from") is None
     assert not ctx.repository.agreements()
-    assert "¿Quieres que sigamos" in response["reply"]["text"]
+    if isinstance(result, dict) and result.get("intent") == "unclear":
+        assert "¿Quieres que sigamos" in response["reply"]["text"]
+    else:
+        assert response["reply"]["interpretation_status"] == "model_error"
+        assert "intentarlo de nuevo" in response["reply"]["text"]
+    assert len(captured) == 1
+    assert send("¿qué pasa si digo sigue?", "ambiguous")["reply"] == response["reply"]
+    assert len(captured) == 1
 
 
-@pytest.mark.parametrize("intent", ["stop", "decline"])
+@pytest.mark.parametrize("intent", ["end", "decline"])
 def test_semantic_decline_is_respected_on_later_turns(continuation, monkeypatch, intent):
     send, ctx, session_id = continuation
     captured = []
     model_stub(monkeypatch, {"intent": intent}, captured)
     ctx.provider = "anthropic"
     assert send("mejor lo dejamos aquí por hoy", "decline")["reply"]["stage"] == "closed"
-    model_stub(monkeypatch, {"intent": "resume"}, captured)
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
     assert send("sigue", "later")["reply"]["stage"] == "closed"
-    assert len(captured) == 1
+    assert len(captured) == 2
     assert ctx.repository.get_session(session_id)["close_reason"] == "customer_request"
 
 
 @pytest.mark.parametrize("stage", ["closed", "agreed", "handoff"])
-def test_legitimate_terminal_outcomes_skip_continuation_model(continuation, monkeypatch, stage):
+def test_legitimate_terminal_outcomes_classify_once_without_reopening(
+    continuation, monkeypatch, stage
+):
     send, ctx, session_id = continuation
     session = ctx.repository.get_session(session_id)
     session.update(stage=stage, close_reason="customer_request")
     with ctx.repository.connection() as db:
         db.execute("UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id))
     captured = []
-    model_stub(monkeypatch, {"intent": "resume"}, captured)
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
     ctx.provider = "anthropic"
     assert send("sigue", "later")["reply"]["stage"] == stage
-    assert not captured and not ctx.repository.agreements()
+    assert len(captured) == 1
+    assert not ctx.repository.agreements()
+    assert send("sigue", "later")["reply"]["stage"] == stage
+    assert len(captured) == 1
 
 
 def test_redacted_context_is_bounded(continuation, monkeypatch):
