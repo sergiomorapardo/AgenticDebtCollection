@@ -30,7 +30,9 @@ interruption-aware playback tracking remain planned.
 
 An optional technical panel, hidden by default, shows the compiled graph and current-turn
 node execution events, durations, errors, and updated field names. STT/TTS appear separately.
-It observes execution without editing checkpoints or exposing raw state values.
+Maps are laid out automatically and discovered from `langgraph.json`. Local source changes
+reload between calls; active calls keep their graph version. Other registered maps are read-only
+previews. Git synchronization, nested subgraph expansion, and Studio debugging remain separate.
 
 ```mermaid
 flowchart LR

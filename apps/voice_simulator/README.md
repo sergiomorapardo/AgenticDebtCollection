@@ -72,6 +72,7 @@ A saved commitment never marks a debt as paid.
 
 | Route | Purpose |
 | --- | --- |
+| `GET /api/graphs` | Inspect registered graph maps, source version, and pending/invalid changes |
 | `GET /api/trace` | Read bounded, sanitized graph execution events without blocking the current turn |
 | `GET /api/session` | Restore current call, transcript, playback state, and elapsed time |
 | `POST /api/start` | Begin an isolated conversation |
@@ -82,7 +83,8 @@ A saved commitment never marks a debt as paid.
 | `POST /api/retry` | Regenerate current response audio without repeating the business turn |
 | `POST /api/end` | End the current conversation |
 
-The page establishes an HttpOnly, SameSite=Strict session cookie. Mutations require
+The page establishes an HttpOnly, SameSite=Strict session cookie scoped by server port.
+Authenticated requests renew its one-hour expiry. Mutations require
 `X-Voice-Client: 1`, a UUID `X-Request-ID`, and (except start) the current `X-Call-ID`.
 Foreign browser origins and unknown hosts are rejected. Responses expose audio IDs, not
 filesystem paths. Calls serialize per browser session. The latest 128 request IDs and
@@ -98,7 +100,13 @@ within this window avoids duplicate provider calls and business writes.
   A pending reply arriving after hangup cannot restart browser playback.
 - Refreshing restores the current call and timer while the server and session remain alive.
   An unplayed response offers manual playback after reload. Tabs sharing the cookie share
-  the same call. Sessions expire after one hour; server restart clears browser sessions.
+  the same call. Sessions expire after one hour of inactivity; server restart clears browser sessions.
+  During a running turn, session/audio reads return the last published state immediately;
+  the page displays a busy state and polls recovery until the turn completes.
+- A failed graph turn is quarantined: finish the call before starting another. Unexpected
+  errors are redacted; only dedicated input/provider errors carry user-facing messages.
+  SQLite rolls back a failed graph transaction and already enforces one agreement per session.
+  A greeting that fails during speech remains reachable for audio retry.
 - Each call has isolated SQLite state, response MP3s, and playback-event evidence under
   ignored `.local/voice/<id>/`. Uploaded recording files are removed after transcription;
   saved response audio and business evidence remain on disk.
@@ -110,20 +118,41 @@ within this window avoids duplicate provider calls and business writes.
 narrow screens. It starts hidden on every page load. Closing it, pressing Escape inside
 it, or using the same toggle returns to the call-only layout without interrupting audio.
 
-The graph topology comes from the compiled graph, including conditional edges. Node
-positions are presentation-only; new node names receive fallback positions. LangGraph
-`tasks` events supply actual node starts/completions/errors; the voice adapter records
-STT/TTS separately. Fast nodes may complete between refreshes, but their executed path
-and measured durations remain visible. Select a node or expand an event for updated
-state field names. The viewer does not expose raw inputs, state values, prompts,
-identification data, provider exceptions, or model reasoning.
+The graph topology comes from the compiled graph, including conditional edges. A layered
+layout computes every position and canvas bound from that topology; renamed/new nodes,
+branches, cycles, and different terminal nodes require no HTML edits. LangGraph debug task
+lifecycle events provide supersteps, starts, completions, and errors. Only observed nodes and
+compatible topology edges from the preceding superstep are highlighted; ambiguous conditional
+fan-in is deliberately not asserted as a transition. STT/TTS events appear separately.
+Fast nodes may finish between refreshes, but their durations remain visible.
+
+When launched from a checkout, `collections-voice` discovers compiled graph references in
+`langgraph.json` (`./src/package/file.py:agent` or `package.module:agent`). Entries must live
+under that checkout's `src/`; runtime factories and external modules are not supported.
+The **Mapa** selector distinguishes the current call from read-only maps of registered graphs.
+Browsing another map never changes the graph executing the call. Voice calls continue using
+`collections_agent` and its messages/reply contract; an unrelated graph needs a voice adapter
+before it can drive a call.
+
+The registry fingerprints local Python source and the manifest. Changes are loaded automatically
+on the next catalog read or call start when no calls hold the current graph version. Active calls
+keep their loaded graph, and the viewer reports pending updates. A syntax/import error preserves
+the last valid catalog and reports a sanitized warning. The next corrected source version is
+retried. Imports compile source directly without modifying bytecode caches. Graph entry modules
+must only define/compile graphs, as in Studio; never put provider calls at module import time.
+
+This watches the current checkout, not GitHub: integrating/pulling other PRs remains explicit.
+Once their source is present here, graph changes need no manual diagram updates or server restart.
+Changes to the server itself, dependencies, or environment still require restart. Without a local
+manifest, the packaged demo uses its built-in graph and does not hot reload.
 
 `GET /api/trace` reads an independent lock so a running business turn does not block it.
-The browser polls every 500 ms only while the panel is open, with one request in flight,
-a timeout, and cancellation when closed. Reading the viewer never invokes the agent or
-speech provider. The latest turn retains up to 200 events in memory; starting another
-turn clears the previous trace. Audio retries append speech events without rerunning nodes.
-This is execution visibility, not Studio debugging, checkpoint editing, or audio streaming.
+The browser polls trace/catalog every 500 ms only while the panel is open, with one poll cycle
+in flight, timeouts, and cancellation when closed. Observation never runs a graph turn or speech
+request. The latest turn retains up to 200 events; another turn clears the previous trace.
+Audio retries append only speech events. Node details expose updated field names, not raw state,
+identification data, prompts, provider exceptions, or model reasoning. Subgraphs are represented
+by their parent node; this does not expand their internal execution or implement Studio debugging.
 
 ## Boundaries
 
@@ -135,11 +164,13 @@ and text needed for speech are sent to ElevenLabs. Use fictional data.
 
 ## Verification
 
-`uv run --extra voice pytest -q` passes 300 tests. Voice tests use fake speech and mock HTTP
+`uv run --extra voice pytest -q` passes 308 tests. Voice tests use fake speech and mock HTTP
 transport without paid calls. They cover provider request shape, redacted errors, automatic
 transcription/send, offer playback gating, retries without duplicate agreements, session/audio
 isolation, request replay, stale call IDs, origin/size checks, reload timing, uncertain failures, and live trace reads during a blocked node. Trace tests
-also cover graph topology, redaction, session isolation, provider/node failures, and retries.
+also cover automatic layout, parallel branches, cycles, renamed terminal nodes, catalog discovery,
+source reload deferred during active calls, invalid-edit recovery, session isolation, failed-start
+recovery, non-blocking reads, error redaction, transaction rollback, and graph-turn quarantine.
 Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
 
 Chrome verification with previously generated audio covers greeting/reply autoplay, enabling
