@@ -11,7 +11,7 @@ flowchart LR
     U[CLI or Studio] --> G[LangGraph workflow]
     G <--> D[(SQLite memory)]
     G --> R[Business-validated outcome or live conversational reply]
-    G -. Optional interpretation and wording .-> H[Claude Haiku API]
+    G -. One interpretation per new human turn .-> H[Claude Haiku API]
     H -. Internal intent and customer token stream .-> G
     classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
@@ -21,7 +21,7 @@ flowchart LR
 
 Green runs locally. Orange is an optional paid API. The default `mock` provider uses a limited,
 offline Spanish parser. Code calculates amounts and enforces policy. With `anthropic`, Haiku
-interprets context and streams conversational replies. Identity, offers and agreements remain
+interprets every new human message in context and streams conversational replies. Completed events replay without another model call. Identity, offers and agreements remain
 backend-validated. Set `COLLECTIONS_RESPONSE_MODE=reviewed` for whole-text review instead.
 See [streaming behavior](docs/STREAMING.md).
 
@@ -133,14 +133,19 @@ These test codes do not represent production authentication.
 
 ```mermaid
 flowchart TD
-    H[Human message in Studio Chat] --> I[Identify fictional customer]
-    I --> V[Verify identity]
-    V --> M[Recover customer history]
-    M --> S[Internal bounded summary]
-    S --> G[Resume collection workflow]
-    G --> F[Relevant account facts and next step]
-    F --> A[Assistant message in Studio]
-    T[Studio thread and message IDs] -.-> G
+    H[Human message] --> R{Saved event?}
+    R -->|Yes| P[Return saved reply]
+    R -->|No| L[Understand once with Haiku]
+    J[Trusted Jinja stage instructions] --> L
+    L --> B{Backend authorization and routing}
+    B --> I[Identify and verify exact evidence]
+    B --> M[Read verified account history]
+    B --> O[Calculate affordable options]
+    B --> C[Validate current offer and consent]
+    B --> E[Respect pause, stop or terminal state]
+    I & M & O & C & E --> A[Respond with context]
+    A --> H
+    DB[(SQLite state and event receipts)] <--> B
 ```
 
 Switch to **Graph** to inspect identity, memory, negotiation, and persistence nodes.
@@ -169,12 +174,37 @@ for Studio. Restart `uv run langgraph dev` after changing configuration. For the
 uv run collections-lab chat --database .local/haiku.sqlite3 --session haiku-001 --provider anthropic
 ```
 
-This consumes tokens using `claude-haiku-4-5-20251001`. There is no automatic provider fallback.
-Tracing is disabled by default. Interpretation can use the latest four persisted turns.
-Wording and review receive only the backend's authorized response reference, without customer
-history. Exact dates and confirmations, offer schedules, terminal replies, and agreement writes
-remain deterministic. `wording_status` exposes `validated`, `deterministic`, `rejected`, or
-`model_error`; rejected wording uses the reference after at most one regeneration.
+This uses `claude-haiku-4-5-20251001`; tracing is disabled by default. The offline `mock`
+provider is a limited test fixture, not a substitute for conversational understanding.
+
+```mermaid
+sequenceDiagram
+    actor Customer
+    participant Meaning as Haiku interpretation
+    participant Rules as Backend rules
+    participant Reply as Contextual reply
+    Customer->>Meaning: Current message + bounded recent context
+    Meaning->>Rules: Intent, proposed terms, acceptance scope
+    Rules->>Rules: Verify identity, policy, amounts, dates and event
+    Rules->>Reply: Authorized decision and next step
+    Reply-->>Customer: Stream conversation or return validated financial receipt
+```
+
+| The LLM interprets | The backend decides |
+| --- | --- |
+| Natural IDs/codes, typos, dates and follow-ups | Exact identity evidence and history access |
+| Payment capacity, requests for options and counteroffers | Eligible installments, dates and amounts |
+| Continuing versus accepting unchanged terms | Whether a current offer can become one agreement |
+| Complaints, unrelated requests and stops | Allowed transitions and terminal-state protection |
+
+Jinja renders packaged instructions from the backend stage. Customer text remains separate data.
+Wording receives the current message and up to four redacted prior turns; account history is never
+pasted into the reply. Financial receipts stay deterministic. `reviewed` mode adds a bounded text
+review; the default streaming mode validates business actions before generating conversation.
+
+Try: `¿qué me ofreces para pagar?` → `solo puedo destinar 250 mil al mes` → `mañana` →
+`acepto las condiciones que acabas de presentar`. Inspect the proposed schedule before accepting.
+A request for options alone creates neither an offer to confirm nor a commitment.
 
 ## Explore the repository
 
