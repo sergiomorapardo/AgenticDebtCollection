@@ -8,6 +8,9 @@
 - Create every new branch as `feature/<name>`, where `<name>` is a short, descriptive, lowercase kebab-case slug.
 - For an independent change, start the branch from the repository's current default branch unless the user explicitly selects another base.
 - Never commit directly to `main`, `master`, `develop`, or another protected branch.
+- Before starting changes and immediately before each squash merge, run `git pull --ff-only origin main` from the clean primary checkout. If it cannot fast-forward, inspect the divergence and preserve local work; never reset or force the update.
+- Update the isolated feature branch against the refreshed default branch and resolve conflicts before merging. For a stack, update its bottom layer against the default branch, then propagate changes through each immediate base in order. Do not bypass existing authorization requirements for history rewrites or force-pushes.
+- After updating branches or resolving conflicts, rerun relevant checks and re-request review when the changes require it. Verify each PR still changes at most 12 files against its immediate base.
 - Preserve unrelated user changes and do not rewrite remote history or force-push without explicit authorization.
 
 ## Commits and pull requests
