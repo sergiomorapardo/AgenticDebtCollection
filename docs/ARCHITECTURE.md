@@ -1,7 +1,8 @@
 # Architecture
 
-One LangGraph workflow processes **one turn per invocation**. Code routes the turn; an optional
-LLM interprets context and rephrases non-financial questions. There is no multi-agent supervisor or parallel model fan-out.
+One LangGraph workflow processes **one turn per invocation**. With `anthropic`, every new human
+message receives one contextual interpretation. All consumers reuse it; backend rules authorize
+actions. The `mock` provider is an explicit offline fixture. There is no parallel model fan-out.
 
 ## The shared collection graph
 
@@ -10,7 +11,8 @@ Solid arrows are fixed edges; dashed arrows are conditional routes.
 
 ```mermaid
 flowchart TD
-    START([START]) --> intake
+    START([START]) --> understand_message
+    understand_message --> intake
     intake -.-> interpret
     intake -.-> prepare_reply
     intake -.-> close
@@ -30,7 +32,8 @@ flowchart TD
     close --> prepare_reply
     prepare_reply -. Eligible Haiku question .-> draft_reply
     prepare_reply -. Deterministic or replay .-> response
-    draft_reply --> review_reply
+    draft_reply -. Reviewed mode .-> review_reply
+    draft_reply -. Streaming mode .-> response
     review_reply -. One retry maximum .-> draft_reply
     review_reply -. Accepted or reference fallback .-> response
     response --> END([END])
@@ -47,11 +50,14 @@ requires broader adversarial and conversational evaluation before a real pilot.
 ```mermaid
 flowchart TD
     START([Human message]) --> human_input
-    human_input -. Unidentified .-> identify_customer
-    human_input -. Unverified .-> verify_identity
-    human_input -. Verified turn .-> intake[Shared collection graph]
-    human_input -. Recall request .-> recover_history
-    human_input -. Replay or closed .-> assistant_message
+    human_input -. Saved reply or business receipt .-> assistant_message
+    human_input -. New event .-> understand_message
+    understand_message --> route_chat_message
+    route_chat_message -. Unidentified .-> identify_customer
+    route_chat_message -. Unverified .-> verify_identity
+    route_chat_message -. Verified turn .-> intake[Shared collection graph]
+    route_chat_message -. Recall request .-> recover_history
+    route_chat_message -. Closed or failed interpretation .-> assistant_message
     identify_customer --> assistant_message
     verify_identity -. Verified .-> recover_history
     verify_identity -. Failed .-> assistant_message
@@ -65,21 +71,23 @@ flowchart TD
 Studio supplies thread and message identifiers. Backend bindings select the customer and
 business session after fictional identity verification. New threads verify again before
 reading memory. Returning threads resume existing sessions; terminal sessions stay terminal.
-Local summaries bound the displayed history without deleting source records or calling an LLM.
+Internal summaries remain private. Customer replies use relevant account facts, never transcript excerpts.
 
 ## Interpretation and policy
 
 ```mermaid
 flowchart LR
-    T[Verified customer text] --> P{Configured provider}
+    T[Every new human message] --> P{Configured provider}
     P -->|mock| M[Offline parser]
     P -->|anthropic| H[Claude Haiku API]
     M --> I[Structured intent and proposed terms]
     H --> I
-    I --> C[Code validates policy and computes dates / COP]
+    J[Trusted Jinja instructions for backend stage] --> H
+    I --> C[Validate identity evidence, consent, policy and COP]
     C --> R[Authorized reference]
-    R --> W[Optional bounded wording and review]
-    W --> F[Persist and deliver]
+    R --> W[Contextual streaming or reviewed prose]
+    W --> F[Persist completed conversation]
+    R --> F2[Persist and deliver financial receipt]
     classDef local fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef paid fill:#fbe9e7,stroke:#bf360c,color:#873000
     class T,P,M,I,C,R,F local
@@ -89,6 +97,8 @@ flowchart LR
 
 | Code owns | Demo rule |
 | --- | --- |
+| Meaning | One stage-aware interpretation; no current-message phrase shortcuts in production |
+| Acceptance | Unconditional consent to the current valid offer, without changed terms |
 | Initial contact | Authorized `phone_simulation` channel; Colombia calendar; contact history |
 | Contact window | Mon–Fri 07:00–19:00; Sat 08:00–15:00; end excluded; Sundays/holidays blocked |
 | Contact frequency | At most one established contact per day; no alternate channels in the same week |
@@ -142,9 +152,11 @@ flowchart TD
     T[Incoming turn] --> K{"Existing session_id + event_id?"}
     K -->|No| G[Process against persisted session and account]
     K -->|Yes| C{Same request content?}
-    C -->|Yes| R[Return cached reply; no duplicate agreement]
+    C -->|Yes| R[Return saved receipt; no model call or duplicate agreement]
     C -->|No| E[Reject conflicting event]
     G --> W[Persist turn atomically]
+    W --> D{Final chat delivery succeeds?}
+    D -->|No| R
 ```
 
 The CLI accepts `session_id`, `event_id`, `account_id`, and `text`. Studio accepts only `messages`;
@@ -157,7 +169,9 @@ are not authentication. Closed, handed-off, and agreed sessions cannot reopen.
 | Unclear or rejected offer | Invalidate it; require newly presented terms before confirmation |
 | Changed balance or policy | Invalidate old terms; require a new proposal and confirmation |
 | Reported payment or dispute | Simulated handoff; no payment posting |
-| Provider error | Neutral reply; no automatic provider/model switch |
+| Provider error | No identity attempt, offer or agreement; no provider/model switch |
+| Failed chat delivery after commit | Recover the original business receipt before classification |
+| Stop during interrupted verification | Close the new thread before reading previous offers |
 
 ## Channel boundaries
 
