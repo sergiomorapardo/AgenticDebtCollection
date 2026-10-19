@@ -4,14 +4,14 @@ Solid green = implemented locally. Dashed paths = future stages.
 
 ```mermaid
 flowchart TD
-    A[1. Text: CLI + Studio + SQLite] -.-> B[2. Local simulated voice call]
+    A[1. Text: CLI + Studio + SQLite] --> B[2. Push-to-talk local voice simulation]
     B -.-> C[3. Authenticated web simulator on staging]
     C -.-> D[4. Test telephony with explicitly authorized numbers]
     D -.-> E[5. Controlled pilot with reviewed policies]
     classDef ready fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
     classDef planned fill:#f3f4f6,stroke:#6b7280,color:#111827,stroke-dasharray:5 5
-    class A ready
-    class B,C,D,E planned
+    class A,B ready
+    class C,D,E planned
 ```
 
 | Stage | Exit evidence |
@@ -22,21 +22,47 @@ flowchart TD
 | 4. Test telephony | Channel timing, interruptions, and handoff validated with authorized numbers |
 | 5. Controlled pilot | Real integrations, policy review, supervision, and stop criteria approved |
 
-## Next: a browser call without a phone number
+## Local voice simulation
 
-**Planned, not implemented.** Start with manual turns; then evaluate streaming and interruptions.
+**Implemented locally:** a standalone HTML call interface over a local FastAPI API, with push-to-talk turns with automatic transcription, sending, and audio
+playback. Browser playback completion enables the next reply. Continuous listening and
+interruption-aware playback tracking remain planned.
+
+An optional technical panel, hidden by default, shows the compiled graph and current-turn
+node execution events, durations, errors, and updated field names. STT/TTS appear separately.
+Maps are laid out automatically and discovered from `langgraph.json`. Local source changes
+reload between calls; active calls keep their graph version. Other registered maps are read-only
+previews. Git synchronization, nested subgraph expansion, and Studio debugging remain separate.
 
 ```mermaid
 flowchart LR
-    M[Microphone] -.-> S[Speech to text]
-    S -.-> G[Existing text workflow]
-    G -.-> T[Text to speech]
-    T -.-> B[Browser speaker]
-    G -.-> P[Transcript, offer, and saved commitment panel]
+    M[Browser microphone] --> S[Speech to text]
+    S --> G[Existing text workflow]
+    G --> T[Text to speech]
+    T --> B[Automatic browser playback]
+    G --> P[Collapsible conversation transcript]
 ```
 
-The voice channel must track which offer was actually heard before accepting confirmation.
-Generating audio alone does not establish that the customer heard the terms.
+The browser's audio-ended event is bound to the current response audio before enabling
+another reply. Offer confirmation is also gated on the server; events for older audio
+cannot unlock a new offer. An ended event does not prove audibility or uninterrupted
+listening. Stronger interruption-aware playback tracking remains a later iteration.
 
-No Gradio app, voice provider, AWS resources, or real calls are included yet.
+### TODO: resume a business session across voice calls
+
+- [ ] Let a verified customer explicitly resume the same business session in a new
+  voice call, preserving history, customer isolation, and existing agreements without
+  duplicate writes. Re-verify identity and follow the shared workflow's continuation rules.
+  Currently, each voice call uses isolated storage and terminal replies end the call.
+
+### TODO: streaming voice
+
+- [ ] Stream response audio only after the complete response text passes the existing
+  business checks; preserve the exact approved amounts and dates.
+- [ ] Validate the streaming endpoint with the configured voice and Free account,
+  recording credits before and after the test, latency, and playback completion.
+- [ ] Add realtime transcription, interruption handling, and reliable full-offer
+  playback tracking in a later iteration. Keep push-to-talk turns as the current baseline.
+
+No AWS resources or real telephone calls are included.
 See [voice simulation](../apps/voice_simulator/README.md) and [deployment](../infra/README.md).

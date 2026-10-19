@@ -14,6 +14,14 @@ dependencies = [
 
 [project.scripts]
 collections-lab = "agents.collections.__main__:main"
+collections-voice = "collections_lab.channels.voice_app:main"
+
+[project.optional-dependencies]
+voice = [
+    "fastapi>=0.141,<1",
+    "uvicorn>=0.54,<1",
+    "httpx>=0.28,<1",
+]
 
 [dependency-groups]
 dev = [
