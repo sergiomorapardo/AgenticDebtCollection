@@ -207,7 +207,11 @@ def _resolve(turn: TurnUnderstanding, tokens: list[str], stage: PromptStage, sta
             value is not None for value in (turn.amount_cop, turn.payment_date, turn.installments)
         )
     ):
-        turn = turn.model_copy(update={"intent": "unclear"})
+        turn = TurnUnderstanding.model_validate(
+            {**turn.model_dump(), "intent": "unclear", "acceptance": "none"}
+        )
+    elif turn.intent != "accept_offer" and turn.acceptance == "unconditional_current_offer":
+        turn = TurnUnderstanding.model_validate({**turn.model_dump(), "acceptance": "none"})
     return TurnResult(turn, status, identity, code)
 
 
