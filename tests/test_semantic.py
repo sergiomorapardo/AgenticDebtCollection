@@ -248,3 +248,82 @@ def test_frequency_is_semantic_and_latest_question_is_bounded(model_call):
     payload = json.loads(calls[0][1][1])
     assert len(payload["backend_context"]["latest_assistant_prompt"]) == 600
     assert "1111" not in calls[0][1][1]
+
+
+def test_closed_unverified_turn_masks_current_numbers(model_call):
+    calls, response = model_call
+    response["result"] = {"intent": "complaint"}
+    result = understand_turn(
+        "mi cédula era 123456789 y mi código 1111",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="closed",
+        context={"identity_verified": False},
+    )
+    assert result.turn.intent == "complaint"
+    assert "123456789" not in calls[0][1][1] and "1111" not in calls[0][1][1]
+    response["result"] = {"intent": "identity", "identity_token": 0}
+    result = understand_turn(
+        "123456789", ctx=CONTEXT, today=TODAY, stage="closed", context={"identity_verified": False}
+    )
+    assert result.status == "model_error" and result.identity_candidate is None
+
+
+@pytest.mark.parametrize(
+    "fields", [{"frequency": "monthly"}, {"frequency": "one_off"}, {"amount_is_capacity": True}]
+)
+def test_changed_frequency_or_capacity_never_accepts_offer(model_call, fields):
+    _, response = model_call
+    response["result"] = {
+        "intent": "accept_offer",
+        "acceptance": "unconditional_current_offer",
+        **fields,
+    }
+    result = understand_turn(
+        "sí, pero mensual", ctx=CONTEXT, today=TODAY, stage="awaiting_confirmation"
+    )
+    assert result.turn.intent == "unclear"
+
+
+def test_studio_text_content_blocks_preserve_recent_question(model_call):
+    from langchain_core.messages import AIMessage
+
+    calls, _ = model_call
+    history = [
+        AIMessage(content=[{"type": "text", "text": "¿Cuánto puedes destinar al mes?"}]),
+        {"role": "human", "content": [{"type": "text", "text": "Mi número era 123456789"}]},
+    ]
+    understand_turn("nada", ctx=CONTEXT, today=TODAY, stage="awaiting_terms", history=history)
+    recent = json.loads(calls[0][1][1])["recent_dialogue"]
+    assert recent[0]["text"] == "¿Cuánto puedes destinar al mes?"
+    assert recent[1]["text"] == "Mi número era [number]"
+
+
+@pytest.mark.parametrize(
+    "text,awaiting,intent,frequency",
+    [
+        ("nada", "capacity", "no_capacity", "unspecified"),
+        ("mensual", "frequency", "negotiate", "monthly"),
+        ("un solo pago", "frequency", "promise", "one_off"),
+    ],
+)
+def test_mock_contextual_capacity_and_frequency(model_call, text, awaiting, intent, frequency):
+    result = understand_turn(
+        text,
+        ctx=SimpleNamespace(provider="mock"),
+        today=TODAY,
+        stage="awaiting_terms",
+        context={"dialogue": {"awaiting": awaiting}},
+    )
+    assert result.turn.intent == intent and result.turn.frequency == frequency
+
+
+@pytest.mark.parametrize(
+    "intent,status", [("no_capacity", "classified"), ("promise", "model_error")]
+)
+def test_zero_only_normalizes_explicit_no_capacity(model_call, intent, status):
+    _, response = model_call
+    response["result"] = {"intent": intent, "amount_cop": 0}
+    result = understand_turn("nada", ctx=CONTEXT, today=TODAY, stage="awaiting_terms")
+    assert result.status == status
+    assert result.turn.amount_cop is None
