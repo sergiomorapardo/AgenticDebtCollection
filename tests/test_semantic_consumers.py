@@ -273,15 +273,17 @@ def test_legacy_resume_routes_semantic_options_to_same_turn_options(runtime, mon
     assert result["session"]["stage"] == "ready"
 
 
-def test_legitimate_closed_session_never_reopens_for_continue(runtime, monkeypatch):
+def test_customer_closed_session_resumes_only_from_bound_continuation(runtime, monkeypatch):
     state = state_for("continue")
     state["session"].update(stage="closed", close_reason="customer_request")
     monkeypatch.setattr(
         runtime.context.repository, "get_session", lambda _: deepcopy(state["session"])
     )
     result = intake.prepare_turn(state, runtime)
-    assert result["session"]["stage"] == "closed"
-    assert result["intake_route"] == "response"
+    assert result["session"]["stage"] == "ready"
+    assert result["session"]["resumed_from"] == "customer_request"
+    assert result["session"]["pending_offer_id"] is None
+    assert result["intake_route"] == "interpret"
 
 
 @pytest.mark.parametrize("intent", ["options", "continue"])

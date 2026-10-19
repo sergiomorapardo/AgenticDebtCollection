@@ -301,7 +301,7 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
         if stage == "awaiting_confirmation":
             fields["acceptance"] = "unconditional_current_offer"
         else:
-            fields["intent"] = "continue"
+            fields["intent"] = "unclear" if stage in {"closed", "agreed", "handoff"} else "continue"
     return TurnUnderstanding(**fields)
 
 
