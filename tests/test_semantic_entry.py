@@ -282,3 +282,59 @@ def test_end_after_interrupted_verification_does_not_recover_prior_account_histo
     assert "200,000" not in ended["reply"]["text"]
     assert "2026-10-20" not in ended["reply"]["text"]
     assert prior_session["pending_offer_id"] not in ended["reply"]["text"]
+
+
+@pytest.mark.parametrize("replace_during_call", [False, True])
+def test_acceptance_uses_repository_snapshot_from_before_model_call(
+    runtime, monkeypatch, replace_during_call
+):
+    from agents.collections.nodes.interpret.node import interpret_turn
+    from agents.collections.policy import build_offer, load_policy
+
+    repo = runtime.context.repository
+    session = save_session(runtime, stage="awaiting_confirmation")
+    offer = build_offer(
+        repo.get_account("demo-001"),
+        load_policy(),
+        today=runtime.context.today,
+        first_payment_date=runtime.context.today,
+    )
+    session.update(pending_offer_id=offer.offer_id, revision=1, clarifications=0)
+    current = state("sí, acepto", session={"pending_offer_id": "untrusted-input"})
+    repo.save_turn(
+        {
+            **current,
+            "event_id": "presented",
+            "session": session,
+            "draft_offer": offer.model_dump(mode="json"),
+            "input_hash": "presented",
+        },
+        {"text": "Presented offer"},
+    )
+
+    def understand(text, **kwargs):
+        assert kwargs["context"]["pending_offer"]["offer_id"] == offer.offer_id
+        if replace_during_call:
+            replacement = repo.get_session("s")
+            replacement["pending_offer_id"] = "replacement-offer"
+            with repo.connection() as db:
+                db.execute(
+                    "UPDATE sessions SET data=?, revision=revision+1 WHERE id=?",
+                    (json.dumps(replacement), "s"),
+                )
+        return TurnResult(
+            TurnUnderstanding(intent="accept_offer", acceptance="unconditional_current_offer"),
+            "classified",
+        )
+
+    monkeypatch.setattr(semantic_entry.semantic, "understand_turn", understand)
+    update = semantic_entry.understand_message(current, runtime)
+    snapshot = update["semantic_result"]["confirmation_context"]
+    assert snapshot["pending_offer_id"] == offer.offer_id
+    assert snapshot["revision"] == 2
+    fresh = {**current, **update, "session": repo.get_session("s")}
+    response = interpret_turn(fresh, runtime)
+    assert (response["intent_route"] == "confirmation") is (not replace_during_call)
+    if replace_during_call:
+        assert response["interpretation"]["acceptance"] == "none"
+    assert not repo.agreements()
