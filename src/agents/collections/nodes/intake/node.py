@@ -11,6 +11,7 @@ from agents.collections.conversation import (
 from agents.collections.memory import event_hash
 from agents.collections.policy import load_policy
 from agents.collections.runtime import AppContext, resolve_context
+from agents.collections.semantic_state import current_understanding
 from agents.collections.state import State
 
 from .tools import verify_demo_code
@@ -40,6 +41,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     }
     if replay is not None:
         return {**base, "replay": True, "reply": replay}
+    understanding = current_understanding(state)
     session = repo.get_session(session_id)
     if session is None:
         repo.get_account(account_id)
@@ -70,6 +72,8 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 "session": session,
                 "response_text": "No puedo iniciar esta gestión en este momento. El contacto no está autorizado para este horario o frecuencia.",
             }
+        if understanding is not None and understanding.turn.intent in {"end", "decline"}:
+            return {**base, "session": session, "intake_route": "close"}
         session["contact_started_at"] = ctx.now.isoformat()
         return {
             **base,
@@ -104,6 +108,8 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 recovered_from="legacy_off_topic_closure",
             )
             session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+            if understanding is not None and understanding.turn.intent in {"options", "continue"}:
+                return {**base, "intake_route": "interpret"}
             return {
                 **base,
                 "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
@@ -111,9 +117,22 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
-            "response_text": terminal_response(session, text),
+            "response_text": terminal_response(
+                session,
+                text,
+                **({"intent": understanding.turn.intent} if understanding is not None else {}),
+            ),
         }
-    if requests_end(text):
+    if understanding is not None and understanding.status == "model_error":
+        return {
+            **base,
+            "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
+        }
+    if (
+        understanding.turn.intent in {"end", "decline"}
+        if understanding is not None
+        else requests_end(text)
+    ):
         return {**base, "intake_route": "close"}
     if session["turns"] >= 20:
         session["stage"] = "handoff"
@@ -122,7 +141,17 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "response_text": "No hemos podido resolver la gestión en esta conversación. Dejo registrada una solicitud de revisión.",
         }
     if not session["identity_verified"]:
-        if verify_demo_code(account_id, text):
+        if understanding is not None:
+            candidate = understanding.verification_candidate
+            if understanding.turn.intent != "verification_code" or candidate is None:
+                return {
+                    **base,
+                    "response_text": "Antes de consultar la cuenta necesito verificar tu identidad. Comparte el código de verificación o dime si prefieres terminar.",
+                }
+            verification_text = f"verificar {candidate}"
+        else:
+            verification_text = text
+        if verify_demo_code(account_id, verification_text):
             session["identity_verified"] = True
             session["stage"] = "ready"
             account = repo.get_account(account_id)
