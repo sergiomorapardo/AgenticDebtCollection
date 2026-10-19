@@ -303,6 +303,8 @@ def test_studio_text_content_blocks_preserve_recent_question(model_call):
     "text,awaiting,intent,frequency",
     [
         ("nada", "capacity", "no_capacity", "unspecified"),
+        ("0", "capacity", "no_capacity", "unspecified"),
+        ("un único abono", "frequency", "promise", "one_off"),
         ("mensual", "frequency", "negotiate", "monthly"),
         ("un solo pago", "frequency", "promise", "one_off"),
     ],

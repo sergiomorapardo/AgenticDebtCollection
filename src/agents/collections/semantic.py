@@ -249,6 +249,7 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
     if awaiting == "capacity" and normalized.strip(" .!¡") in {
         "nada",
         "cero",
+        "0",
         "no puedo destinar nada",
         "no me queda nada",
         "nada, este mes no me queda ni para comer",
@@ -257,7 +258,15 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
     if awaiting == "frequency":
         if normalized.strip(" .") in {"mensual", "al mes", "cada mes", "mensuales"}:
             return TurnUnderstanding(intent="negotiate", frequency="monthly")
-        if normalized.strip(" .") in {"una vez", "un solo pago", "solo esta vez"}:
+        if normalized.strip(" .") in {
+            "una vez",
+            "un solo pago",
+            "solo esta vez",
+            "un unico abono",
+            "un abono",
+            "una sola vez",
+            "unico",
+        }:
             return TurnUnderstanding(intent="promise", frequency="one_off")
     parsed = parse_turn(text, today=today, provider="mock")
     fields = parsed.model_dump(exclude={"identity_code"})
