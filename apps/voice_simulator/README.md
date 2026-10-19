@@ -213,3 +213,7 @@ interpretation is unavailable. It does not change the persisted business outcome
 The graph's terminal `finished` replies still end the voice call. Customer-led continuation
 after a closed collection outcome is available through the text workflow; resuming the same
 business session across separate voice calls remains unsupported by this isolated demo.
+
+- [ ] **TODO:** Resume the same business session across separate voice calls after fresh
+  identity verification and an explicit customer request, preserving history and avoiding
+  duplicate agreements. See the [roadmap](../../docs/ROADMAP.md#todo-resume-a-business-session-across-voice-calls).

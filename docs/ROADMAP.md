@@ -48,6 +48,13 @@ another reply. Offer confirmation is also gated on the server; events for older 
 cannot unlock a new offer. An ended event does not prove audibility or uninterrupted
 listening. Stronger interruption-aware playback tracking remains a later iteration.
 
+### TODO: resume a business session across voice calls
+
+- [ ] Let a verified customer explicitly resume the same business session in a new
+  voice call, preserving history, customer isolation, and existing agreements without
+  duplicate writes. Re-verify identity and follow the shared workflow's continuation rules.
+  Currently, each voice call uses isolated storage and terminal replies end the call.
+
 ### TODO: streaming voice
 
 - [ ] Stream response audio only after the complete response text passes the existing
