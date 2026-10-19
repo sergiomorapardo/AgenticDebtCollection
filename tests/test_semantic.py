@@ -181,7 +181,9 @@ def test_acceptance_requires_scope_and_no_changed_terms(model_call, fields, stag
     response["result"] = {"intent": "accept_offer", **fields}
     result = understand_turn("sí", ctx=CONTEXT, today=TODAY, stage=stage)
     assert result.turn.intent == expected
-    assert result.turn.acceptance == fields.get("acceptance", "none")
+    assert result.turn.acceptance == (
+        "unconditional_current_offer" if expected == "accept_offer" else "none"
+    )
 
 
 def test_conditional_counteroffer_keeps_financial_meaning(model_call):
@@ -329,3 +331,19 @@ def test_zero_only_normalizes_explicit_no_capacity(model_call, intent, status):
     result = understand_turn("nada", ctx=CONTEXT, today=TODAY, stage="awaiting_terms")
     assert result.status == status
     assert result.turn.amount_cop is None
+
+
+@pytest.mark.parametrize("intent", ["negotiate", "promise", "counteroffer", "unclear"])
+@pytest.mark.parametrize("stage", ["ready", "awaiting_confirmation"])
+def test_other_intents_cannot_carry_unconditional_acceptance(model_call, intent, stage):
+    _, response = model_call
+    response["result"] = {
+        "intent": intent,
+        "acceptance": "unconditional_current_offer",
+        "amount_cop": 200000,
+    }
+    result = understand_turn("propondría 200 mil", ctx=CONTEXT, today=TODAY, stage=stage)
+    assert result.status == "classified"
+    assert result.turn.intent == intent
+    assert result.turn.acceptance == "none"
+    assert result.turn.amount_cop == 200000
