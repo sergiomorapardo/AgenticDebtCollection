@@ -64,9 +64,9 @@ def forbid(*args, **kwargs):
 
 @pytest.fixture(autouse=True)
 def forbid_legacy_classification(monkeypatch):
-    monkeypatch.setattr(interpretation, "parse_turn", forbid)
-    monkeypatch.setattr(intake, "requests_end", forbid)
-    monkeypatch.setattr(dialogue, "explicit_refusal", forbid)
+    monkeypatch.setattr(interpretation, "parse_turn", forbid, raising=False)
+    monkeypatch.setattr(intake, "requests_end", forbid, raising=False)
+    monkeypatch.setattr(dialogue, "explicit_refusal", forbid, raising=False)
 
 
 def test_end_uses_meaning_even_when_text_looks_like_payment(runtime, monkeypatch):
@@ -433,6 +433,73 @@ def test_explicit_one_off_payment_does_not_inherit_previous_installment_plan(run
     assert result["intent_route"] == "promise"
     assert result["session"]["draft_terms"].get("installments", 1) == 1
     assert "amount_is_capacity" not in result["session"]["draft_terms"]
+
+
+@pytest.mark.parametrize("mode", ["missing", "stale", "model_error"])
+def test_invalid_meaning_never_starts_a_session_or_contact(runtime, mode):
+    state = state_for("verification_code", text="verificar 1111", code_token=0)
+    if mode == "missing":
+        state.pop("semantic_result")
+    elif mode == "stale":
+        state["semantic_result"]["event_id"] = "previous-event"
+    else:
+        state["semantic_result"]["status"] = "model_error"
+    with pytest.raises(ValueError, match="semantic interpretation"):
+        intake.prepare_turn(state, runtime)
+    assert runtime.context.repository.get_session(state["session_id"]) is None
+    assert runtime.context.repository.contacts_for("demo-001") == []
+    assert not runtime.context.repository.agreements()
+
+
+def test_missing_meaning_for_active_session_does_not_verify_close_or_change_terms(
+    runtime, monkeypatch
+):
+    state = state_for("end", text="verificar 1111")
+    state.pop("semantic_result")
+    state["session"].update(stage="awaiting_identity", identity_verified=False)
+    previous = deepcopy(state["session"])
+    monkeypatch.setattr(runtime.context.repository, "get_session", lambda _: state["session"])
+    result = intake.prepare_turn(state, runtime)
+    assert result["intake_route"] == "response"
+    assert result["session"] == previous
+
+
+@pytest.mark.parametrize("consumer", [interpretation.interpret_turn, dialogue.plan_dialogue])
+@pytest.mark.parametrize("mode", ["missing", "model_error"])
+def test_business_consumers_fail_closed_without_meaning(runtime, consumer, mode):
+    state = state_for("accept_offer", text="confirmo", acceptance="unconditional_current_offer")
+    state["session"].update(stage="awaiting_confirmation", pending_offer_id="presented-offer")
+    state["interpretation"] = {"intent": "refuse"}
+    if mode == "missing":
+        state.pop("semantic_result")
+    else:
+        state["semantic_result"]["status"] = "model_error"
+    previous = deepcopy(state["session"])
+    result = consumer(state, runtime)
+    assert result["intent_route"] == "response"
+    assert state["session"] == previous
+    assert not result.get("commit_requested")
+    assert not result.get("draft_offer")
+    assert not runtime.context.repository.agreements()
+
+
+def test_only_empty_initial_bootstrap_can_lack_semantic_meaning(runtime):
+    state = state_for("greeting", text="")
+    state.pop("semantic_result")
+    result = intake.prepare_turn(state, runtime)
+    assert result["session"]["stage"] == "awaiting_identity"
+    assert not result["session"]["identity_verified"]
+    assert result["session"]["identity_attempts"] == 0
+
+
+def test_saved_event_replay_needs_no_semantic_meaning(runtime, monkeypatch):
+    state = state_for("end", text="terminar")
+    state.pop("semantic_result")
+    reply = {"text": "Previously saved answer", "stage": "closed"}
+    monkeypatch.setattr(runtime.context.repository, "get_event", lambda *args: reply)
+    monkeypatch.setattr(runtime.context.repository, "get_session", forbid)
+    result = intake.prepare_turn(state, runtime)
+    assert result["replay"] and result["reply"] == reply
 
 
 @pytest.mark.parametrize(

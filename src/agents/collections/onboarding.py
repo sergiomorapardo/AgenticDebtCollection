@@ -4,7 +4,6 @@ import json
 import re
 from typing import Literal
 
-from anthropic import APIError
 from pydantic import BaseModel, ConfigDict
 
 from agents.collections.conversation import normalize_text, social_intent
@@ -80,7 +79,7 @@ def classify_onboarding(text, ctx, history=None):
     return "unclear"
 
 
-def onboarding_reply(text, binding, ctx, *, understanding=None):
+def onboarding_reply(text, binding, ctx, *, understanding):
     """Return an authorized reply and updated conversational memory, never business state."""
     binding = dict(binding)
     selected = bool(binding["account_id"])
@@ -91,8 +90,9 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
         else "Para consultar tu cuenta, ¿me compartes tu número de identificación?"
     )
     history = binding.get("onboarding_history", [])[-4:]
-    status = "classified"
-    if understanding is not None:
+    status = "model_error"
+    intent = "unclear"
+    if understanding is not None and understanding.status != "model_error":
         status = understanding.status
         intent = {
             "continue": "willing",
@@ -108,11 +108,6 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
         }.get(understanding.turn.intent, understanding.turn.intent)
         if intent not in {"greeting", "decline", "willing", "complaint", "scope", "identity_help"}:
             intent = "unclear"
-    else:
-        try:
-            intent = classify_onboarding(text, ctx, history)
-        except (APIError, ValueError, TimeoutError, ConnectionError):
-            intent, status = "unclear", "model_error"
     previous = binding.get("onboarding_intent")
     if intent == "decline":
         binding["onboarding_paused"] = True
@@ -174,7 +169,7 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
                 binding.get("onboarding_paused", False),
                 intent=intent,
                 stage=stage,
-                next_step=None if append_step else step,
+                next_step=None if append_step or binding.get("onboarding_paused") else step,
             )
     if status != "model_error" and append_step:
         response += " " + step
