@@ -145,3 +145,48 @@ def test_explicit_identity_help_receives_backend_instructions_without_resuming_p
     current, response = onboarding_reply("¿Cómo escribo el código de verificación?", current, ctx)
     assert "compárteme el código de verificación" in response["text"]
     assert current["attempts"] == 0 and not current["verified"]
+
+
+def test_optional_identity_step_is_authorized_only_when_not_paused(monkeypatch):
+    captured = []
+
+    def request(ctx, schema, system, payload):
+        captured.append(payload)
+        if schema is wording.ReplyDraft:
+            return schema(text="¿Cuál de los números deseas usar para consultar tu cuenta?")
+        return schema(
+            addresses_current_message=True,
+            respects_scope_and_pause=True,
+            no_unsupported_claims=True,
+            avoids_repetition=True,
+        )
+
+    monkeypatch.setattr(wording, "_request", request)
+    for paused in (False, True):
+        wording.contextual_reply(
+            context(),
+            "123456789 o 1000000001",
+            [],
+            "Aclaremos tu solicitud.",
+            paused,
+            intent="unclear",
+            stage="awaiting_customer",
+            next_step="Comparte tu identificación.",
+        )
+        assert captured[-1]["next_step"] == (None if paused else "Comparte tu identificación.")
+        assert "123456789" not in str(captured[-1])
+
+
+def test_reviewed_identity_step_has_one_owner(monkeypatch):
+    from agents.collections import onboarding
+
+    for intent in ("greeting", "willing", "identity_help"):
+        monkeypatch.setattr(onboarding, "classify_onboarding", lambda *args, intent=intent: intent)
+
+        def generate(*args, **kwargs):
+            assert kwargs["next_step"] is None
+            return "Claro, te ayudo.", "validated", 1
+
+        monkeypatch.setattr(onboarding, "contextual_reply", generate)
+        _, response = onboarding_reply("Quiero consultar", binding(), context())
+        assert response["text"].count("¿me compartes tu número de identificación?") == 1
