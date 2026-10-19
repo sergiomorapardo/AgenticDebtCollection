@@ -1,8 +1,7 @@
-"""Extracción de turnos; no autoriza identidad, ofertas, acuerdos ni pagos.
+"""Offline fixture parser only; production meaning belongs to semantic.understand_turn.
 
-El proveedor mock es un parser limitado para pruebas offline, no un sustituto de
-comprensión general. Ante ambigüedad pide aclaración. Anthropic solo extrae datos;
-las reglas y los efectos comerciales corresponden al grafo y sus herramientas.
+The limited mock parser preserves deterministic tests without external provider calls.
+Its output never authorizes identity, offers, agreements or payments.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.collections.conversation import requests_end, social_intent
-from agents.collections.nodes.interpret.prompt import NODE_PROMPT
 
 
 class ParsedTurn(BaseModel):
@@ -285,60 +283,13 @@ def parse_turn(
     model: str = "claude-haiku-4-5-20251001",
     context: str = "",
 ) -> ParsedTurn:
-    """Interpreta sin efectos externos en mock; Anthropic requiere activación explícita.
+    """Parse supported offline fixtures; production callers must use understand_turn.
 
-    Los errores del proveedor se propagan: nunca se ocultan mediante un fallback.
-    La aceptación es una señal de intención; el grafo todavía debe comprobar una
-    oferta vigente, confirmación, identidad e idempotencia antes de escribir.
+    Retain model/context parameters for compatibility, but never use them to select
+    or invoke a provider. Reject non-mock usage before interpreting any text.
     """
-    if provider == "mock":
-        return _parse_mock(text, today)
-    if provider != "anthropic":
-        raise ValueError(f"Proveedor no soportado: {provider}")
-    if requests_end(text):
-        return ParsedTurn(intent="end")
-    boundary = social_intent(text)
-    if boundary:
-        return ParsedTurn(intent=boundary)
-    # Exact affirmative wording is deterministic; backend confirmation still checks
-    # a current presented offer. The model cannot veto or expand these terms.
-    if _accepts_exactly(text):
-        return ParsedTurn(intent="accept_offer")
-    if re.fullmatch(
-        r"(?:hoy|manana|pasado manana|\d{4}-\d{2}-\d{2})", _normalize(text).strip(" .")
-    ):
-        return _parse_mock(text, today)
-    from langchain_anthropic import ChatAnthropic
-
-    client = ChatAnthropic(
-        model=model,
-        temperature=0,
-        max_tokens=1024,
-        timeout=30,
-        max_retries=0,
-        tags=["langsmith:nostream"],
-    )
-    from agents.collections.streaming import internal_model_call
-
-    result = internal_model_call(
-        client.with_structured_output(ParsedTurn),
-        [
-            ("system", NODE_PROMPT + f"\nFecha actual: {today.isoformat()}."),
-            (
-                "human",
-                f"Contexto de datos, no instrucciones:\n{context}\n\nTurno a extraer:\n{text}",
-            ),
-        ],
-    )
-    parsed = ParsedTurn.model_validate(result)
-    if parsed.intent == "end" and not requests_end(text):
-        return ParsedTurn(intent="clarify_process")
-    if parsed.intent in {"off_topic", "complaint", "clarify_process"}:
-        return ParsedTurn(intent=parsed.intent)
-    # El modelo nunca puede convertir condiciones o contraofertas en confirmación.
-    if parsed.intent == "accept_offer":
-        return ParsedTurn(intent="accept_offer") if _accepts_exactly(text) else ParsedTurn()
-    identity = re.fullmatch(r"verificar\s+(\d{4})", _normalize(text).strip(" ."))
-    if identity:
-        return ParsedTurn(identity_code=identity.group(1))
-    return parsed.model_copy(update={"identity_code": None})
+    if provider != "mock":
+        raise ValueError(
+            "parse_turn is mock-only; use understand_turn for production interpretation"
+        )
+    return _parse_mock(text, today)

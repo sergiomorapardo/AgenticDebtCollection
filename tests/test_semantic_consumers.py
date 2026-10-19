@@ -281,15 +281,17 @@ def test_legacy_resume_routes_semantic_options_to_same_turn_options(runtime, mon
     assert result["session"]["stage"] == "ready"
 
 
-def test_legitimate_closed_session_never_reopens_for_continue(runtime, monkeypatch):
+def test_customer_closed_session_resumes_only_from_bound_continuation(runtime, monkeypatch):
     state = state_for("continue")
     state["session"].update(stage="closed", close_reason="customer_request")
     monkeypatch.setattr(
         runtime.context.repository, "get_session", lambda _: deepcopy(state["session"])
     )
     result = intake.prepare_turn(state, runtime)
-    assert result["session"]["stage"] == "closed"
-    assert result["intake_route"] == "response"
+    assert result["session"]["stage"] == "ready"
+    assert result["session"]["resumed_from"] == "customer_request"
+    assert result["session"]["pending_offer_id"] is None
+    assert result["intake_route"] == "interpret"
 
 
 @pytest.mark.parametrize("intent", ["options", "continue"])
@@ -500,6 +502,42 @@ def test_saved_event_replay_needs_no_semantic_meaning(runtime, monkeypatch):
     monkeypatch.setattr(runtime.context.repository, "get_session", forbid)
     result = intake.prepare_turn(state, runtime)
     assert result["replay"] and result["reply"] == reply
+
+
+@pytest.mark.parametrize("intent", ["continue", "unclear"])
+def test_menu_acknowledgement_clarifies_selection_without_relisting(runtime, monkeypatch, intent):
+    state = state_for(intent, text="A novel acknowledgement, not a recognized keyword")
+    state["session"]["dialogue"] = {"awaiting": "option", "monthly_capacity_cop": 250000}
+    original = deepcopy(state["session"])
+    monkeypatch.setattr(runtime.context.repository, "get_session", lambda _: deepcopy(original))
+    result = intake.prepare_turn(state, runtime)
+    assert result["intake_route"] == "response"
+    assert "Cuál de las opciones" in result["response_text"]
+    assert "COP" not in result["response_text"]
+    assert result["session"] == original
+    assert result["interpretation"]["intent"] == intent
+    assert not runtime.context.repository.agreements()
+
+
+@pytest.mark.parametrize(
+    "intent,fields",
+    [
+        ("options", {}),
+        ("negotiate", {"installments": 3}),
+        ("continue", {"amount_cop": 250000, "amount_is_capacity": True, "frequency": "monthly"}),
+        ("unclear", {"payment_date": "2026-10-20"}),
+        ("dispute", {}),
+        ("end", {}),
+    ],
+)
+def test_menu_clarification_preserves_new_meaning(runtime, monkeypatch, intent, fields):
+    state = state_for(intent, **fields)
+    state["session"]["dialogue"] = {"awaiting": "option"}
+    monkeypatch.setattr(
+        runtime.context.repository, "get_session", lambda _: deepcopy(state["session"])
+    )
+    result = intake.prepare_turn(state, runtime)
+    assert result["intake_route"] == ("close" if intent == "end" else "interpret")
 
 
 @pytest.mark.parametrize(

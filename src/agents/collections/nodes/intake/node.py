@@ -116,6 +116,37 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             )
             session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
             return {**base, "intake_route": "interpret"}
+    if session["stage"] == "closed" and session.get("identity_verified"):
+        intent = understanding.turn.intent
+        if intent in {"dispute", "reported_payment", "request_human"}:
+            # Stopping collection does not prevent the customer from raising a review.
+            # Preserve any recorded agreement and never interpret this as payment consent.
+            session.update(pending_offer_id=None, draft_terms={})
+            return {**base, "intake_route": "interpret"}
+        if (
+            session.get("close_reason") in {"customer_request", "repeated_refusal"}
+            and not session.get("agreement_id")
+            and intent in {"continue", "options", "promise", "negotiate", "counteroffer"}
+        ):
+            # Only the customer's newly understood request resumes collection. A greeting,
+            # complaint, ambiguous assent or acceptance of an obsolete offer cannot do so.
+            if session["turns"] >= 20:
+                session.update(stage="handoff", pending_offer_id=None, draft_terms={})
+                return {
+                    **base,
+                    "response_text": "Para seguir revisando tu caso, dejo registrada una solicitud de revisión. No registré un nuevo acuerdo.",
+                }
+            previous_reason = session["close_reason"]
+            session.update(
+                stage="ready",
+                pending_offer_id=None,
+                draft_terms={},
+                clarifications=0,
+                close_reason=None,
+                resumed_from=previous_reason,
+            )
+            session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+            return {**base, "intake_route": "interpret"}
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
@@ -155,5 +186,26 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         return {
             **base,
             "response_text": "El código de verificación no coincide. Revisa el código e inténtalo de nuevo.",
+        }
+    meaning = understanding.turn
+    if (
+        session["stage"] == "ready"
+        and session.get("dialogue", {}).get("awaiting") == "option"
+        and not session.get("pending_offer_id")
+        and meaning.intent in {"continue", "unclear"}
+        and meaning.acceptance == "none"
+        and meaning.frequency == "unspecified"
+        and not meaning.amount_is_capacity
+        and all(
+            value is None
+            for value in (meaning.amount_cop, meaning.payment_date, meaning.installments)
+        )
+    ):
+        # The customer acknowledged a menu, but has not selected a plan. Preserve the
+        # pending question instead of treating acknowledgement as a new menu request.
+        return {
+            **base,
+            "interpretation": meaning.model_dump(mode="json"),
+            "response_text": "¿Cuál de las opciones que te mostré prefieres? Si ninguna se ajusta, cuéntame cuánto podrías pagar al mes.",
         }
     return {**base, "intake_route": "interpret"}

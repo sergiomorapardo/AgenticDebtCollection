@@ -1,65 +1,19 @@
 """Interpret pre-verification conversation without account access or financial actions."""
 
-import json
 import re
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict
 
 from agents.collections.conversation import normalize_text, social_intent
 from agents.collections.onboarding_wording import contextual_reply, redact_dialogue
 from agents.collections.prompts import render_prompt
 
 
-class OnboardingIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    intent: Literal[
-        "greeting", "decline", "willing", "complaint", "scope", "identity_help", "unclear"
-    ] = "unclear"
-
-
 def classify_onboarding(text, ctx, history=None):
-    normalized = normalize_text(text)
-    if getattr(ctx, "stream_responses", False) and normalized in {
-        "hola",
-        "buenas",
-        "buenos dias",
-        "buenas tardes",
-        "que hay",
-    }:
-        return "greeting"
-    if ctx.provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        client = ChatAnthropic(
-            model=ctx.model,
-            temperature=0,
-            max_tokens=128,
-            timeout=15,
-            max_retries=0,
-            tags=["langsmith:nostream"],
-        )
-        from agents.collections.streaming import internal_model_call
-
-        result = internal_model_call(
-            client.with_structured_output(OnboardingIntent),
-            [
-                ("system", render_prompt("onboarding_classify")),
-                (
-                    "human",
-                    json.dumps(
-                        {
-                            "current_message": redact_dialogue(text, max_length=None),
-                            "recent_dialogue": (history or [])[-4:],
-                        },
-                        ensure_ascii=False,
-                    ),
-                ),
-            ],
-        )
-        return OnboardingIntent.model_validate(result).intent
+    """Classify limited offline fixtures; all production turns use understand_turn."""
     if ctx.provider != "mock":
-        raise ValueError(f"Unsupported provider: {ctx.provider}")
+        raise ValueError(
+            "classify_onboarding is mock-only; use understand_turn for production interpretation"
+        )
+    normalized = normalize_text(text)
     if re.search(r"\bno (?:quiero|voy a|deseo)\b", normalized):
         return "decline"
     if re.search(

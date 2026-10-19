@@ -16,6 +16,7 @@ from agents.collections.conversation import LEGACY_CLOSE, requests_end
 from agents.collections.interpreter import parse_turn
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext
+from agents.collections.semantic import TurnUnderstanding, understand_turn
 
 
 @pytest.fixture
@@ -85,32 +86,66 @@ def test_only_explicit_conversation_exit_can_close(text, expected):
         ("que mal servicio!!!", "complaint"),
     ],
 )
-def test_screenshot_boundaries_are_provider_independent(provider, text, intent):
-    assert parse_turn(text, today=date(2026, 10, 19), provider=provider).intent == intent
+def test_screenshot_boundaries_are_provider_independent(monkeypatch, provider, text, intent):
+    if provider == "mock":
+        assert parse_turn(text, today=date(2026, 10, 19)).intent == intent
+        return
+    calls = []
 
-
-def test_model_cannot_close_without_current_stop_request(monkeypatch):
     class FakeModel:
         def __init__(self, **kwargs):
             pass
 
         def with_structured_output(self, schema):
+            assert schema is TurnUnderstanding
             return self
 
         def invoke(self, messages):
-            return {"intent": "end", "amount_cop": 600000}
+            calls.append(messages)
+            return {"intent": intent}
 
     monkeypatch.setitem(
         sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=FakeModel)
     )
-    parsed = parse_turn(
+    result = understand_turn(
+        text,
+        today=date(2026, 10, 19),
+        ctx=SimpleNamespace(provider="anthropic", model="test-model"),
+        stage="ready",
+    )
+    assert result.turn.intent == intent and len(calls) == 1
+    assert json.loads(calls[0][1][1])["current_message"] == text
+
+
+def test_current_social_meaning_is_not_overridden_by_a_prior_stop(monkeypatch):
+    observed = []
+
+    class FakeModel:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_structured_output(self, schema):
+            assert schema is TurnUnderstanding
+            return self
+
+        def invoke(self, messages):
+            observed.append(messages)
+            return {"intent": "off_topic"}
+
+    monkeypatch.setitem(
+        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=FakeModel)
+    )
+    result = understand_turn(
         "hablemos de los planetas",
         today=date(2026, 10, 19),
-        provider="anthropic",
-        context="The previous customer refused to pay",
+        ctx=SimpleNamespace(provider="anthropic", model="test-model"),
+        stage="ready",
+        history=[{"user": "quiero terminar", "assistant": "¿Qué necesitas aclarar?"}],
     )
-    assert parsed.intent == "clarify_process"
-    assert parsed.amount_cop is None
+    assert result.turn.intent == "off_topic" and result.turn.amount_cop is None
+    payload = json.loads(observed[0][1][1])
+    assert payload["current_message"] == "hablemos de los planetas"
+    assert payload["recent_dialogue"][0]["user"] == "quiero terminar"
 
 
 def test_screenshot_sequence_stays_open_and_can_negotiate(conversation):
