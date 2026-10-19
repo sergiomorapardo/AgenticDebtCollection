@@ -391,3 +391,37 @@ def test_resume_preserves_exhausted_turn_budget(refused_conversation, monkeypatc
     session = ctx.repository.get_session(session_id)
     assert session["turns"] == 21 and session["negotiations"] == 3
     assert not ctx.repository.agreements()
+
+
+def test_reopened_studio_menu_waits_for_a_choice_without_repeating(
+    refused_conversation, monkeypatch
+):
+    send, ctx, session_id = refused_conversation
+    captured = []
+    ctx.provider = "anthropic"
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
+    menu = send("dale", "resume-menu")
+    assert "600,000 COP" in menu["reply"]["text"]
+    # Keep the contextual writer deterministic here; semantic calls still use the model stub.
+    monkeypatch.setattr(
+        "agents.collections.wording._request",
+        lambda *args: (_ for _ in ()).throw(ValueError("writer unavailable")),
+    )
+    for i, message in enumerate(("bueno", "sí, esa")):
+        result = send(message, f"ack-{i}")
+        assert "Cuál de las opciones" in result["reply"]["text"]
+        assert result["reply"]["stage"] == "ready"
+        assert result["reply"]["offer_id"] is None
+        assert ctx.repository.get_session(session_id)["dialogue"]["awaiting"] == "option"
+    assert len(captured) == 3
+    assert send("sí, esa", "ack-1")["reply"] == result["reply"]
+    assert len(captured) == 3
+    model_stub(
+        monkeypatch,
+        {"intent": "negotiate", "installments": 3, "payment_date": "2026-10-20"},
+        captured,
+    )
+    proposal = send("la de tres, empezando mañana", "select-plan")
+    assert proposal["reply"]["stage"] == "awaiting_confirmation"
+    assert "200,000 COP" in proposal["reply"]["text"]
+    assert not ctx.repository.agreements()

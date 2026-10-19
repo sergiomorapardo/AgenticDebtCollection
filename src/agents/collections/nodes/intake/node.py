@@ -187,4 +187,25 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             **base,
             "response_text": "El código de verificación no coincide. Revisa el código e inténtalo de nuevo.",
         }
+    meaning = understanding.turn
+    if (
+        session["stage"] == "ready"
+        and session.get("dialogue", {}).get("awaiting") == "option"
+        and not session.get("pending_offer_id")
+        and meaning.intent in {"continue", "unclear"}
+        and meaning.acceptance == "none"
+        and meaning.frequency == "unspecified"
+        and not meaning.amount_is_capacity
+        and all(
+            value is None
+            for value in (meaning.amount_cop, meaning.payment_date, meaning.installments)
+        )
+    ):
+        # The customer acknowledged a menu, but has not selected a plan. Preserve the
+        # pending question instead of treating acknowledgement as a new menu request.
+        return {
+            **base,
+            "interpretation": meaning.model_dump(mode="json"),
+            "response_text": "¿Cuál de las opciones que te mostré prefieres? Si ninguna se ajusta, cuéntame cuánto podrías pagar al mes.",
+        }
     return {**base, "intake_route": "interpret"}
