@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from agents.collections.interpreter import ParsedTurn, parse_turn
+from agents.collections.semantic import TurnUnderstanding, understand_turn
 
 TODAY = date(2026, 10, 17)
 
@@ -98,7 +99,7 @@ def _fake_provider(monkeypatch, output=None, error=None):
             observed.update(kwargs)
 
         def with_structured_output(self, schema):
-            assert schema is ParsedTurn
+            assert schema is TurnUnderstanding
             return self
 
         def invoke(self, messages):
@@ -113,41 +114,57 @@ def _fake_provider(monkeypatch, output=None, error=None):
     return observed
 
 
+def production_turn(text, *, stage="awaiting_confirmation"):
+    return understand_turn(
+        text,
+        ctx=SimpleNamespace(provider="anthropic", model="claude-haiku-4-5-20251001"),
+        today=TODAY,
+        stage=stage,
+    )
+
+
 def test_anthropic_uses_haiku_and_cannot_promote_conditional_acceptance(monkeypatch):
-    observed = _fake_provider(monkeypatch, {"intent": "accept_offer"})
-    parsed = parse_turn("acepto si me dan un descuento", today=TODAY, provider="anthropic")
-    assert parsed.intent == "unclear"
+    observed = _fake_provider(monkeypatch, {"intent": "accept_offer", "acceptance": "conditional"})
+    result = production_turn("acepto si me dan un descuento")
+    assert result.turn.intent == "unclear"
     assert observed["model"] == "claude-haiku-4-5-20251001"
     assert observed["max_retries"] == 0
 
 
 def test_model_cannot_invent_identity_code(monkeypatch):
     _fake_provider(monkeypatch, {"intent": "unclear", "identity_code": "1234"})
-    assert parse_turn("soy yo", today=TODAY, provider="anthropic").identity_code is None
+    result = production_turn("soy yo", stage="awaiting_identity")
+    assert result.status == "model_error" and result.verification_candidate is None
 
 
 def test_provider_errors_are_not_hidden(monkeypatch):
-    _fake_provider(monkeypatch, error=RuntimeError("provider unavailable"))
-    with pytest.raises(RuntimeError, match="provider unavailable"):
-        parse_turn("hola", today=TODAY, provider="anthropic")
+    _fake_provider(monkeypatch, error=TimeoutError("provider unavailable"))
+    result = production_turn("hola")
+    assert result.status == "model_error" and result.turn.intent == "unclear"
 
 
 def test_unknown_provider_is_not_silently_mocked():
-    with pytest.raises(ValueError, match="Proveedor no soportado"):
+    with pytest.raises(ValueError, match="mock-only; use understand_turn"):
         parse_turn("hola", today=TODAY, provider="unknown")
 
 
 def test_acceptance_cannot_smuggle_changed_financial_fields(monkeypatch):
-    _fake_provider(monkeypatch, {"intent": "accept_offer", "amount_cop": 100, "installments": 5})
-    assert parse_turn("acepto", today=TODAY, provider="anthropic") == ParsedTurn(
-        intent="accept_offer"
+    _fake_provider(
+        monkeypatch,
+        {
+            "intent": "accept_offer",
+            "acceptance": "unconditional_current_offer",
+            "amount_cop": 100,
+            "installments": 5,
+        },
     )
+    assert production_turn("acepto").turn.intent == "unclear"
 
 
 def test_provider_output_is_schema_validated(monkeypatch):
     _fake_provider(monkeypatch, {"intent": "promise", "amount_cop": -1})
-    with pytest.raises(ValidationError):
-        parse_turn("pagaré mañana", today=TODAY, provider="anthropic")
+    result = production_turn("pagaré mañana")
+    assert result.status == "model_error" and result.turn.intent == "unclear"
 
 
 @pytest.mark.parametrize(
@@ -184,7 +201,7 @@ def test_negated_date_is_not_extracted_as_a_draft_update():
 
 def test_anthropic_question_cannot_confirm(monkeypatch):
     _fake_provider(monkeypatch, {"intent": "accept_offer"})
-    assert parse_turn("¿confirmo?", today=TODAY, provider="anthropic") == ParsedTurn()
+    assert production_turn("¿confirmo?").turn.intent == "unclear"
 
 
 @pytest.mark.parametrize(
@@ -198,3 +215,20 @@ def test_anthropic_question_cannot_confirm(monkeypatch):
 )
 def test_objections_and_counteroffers_are_not_acceptance(text, intent):
     assert parse_turn(text, today=TODAY).intent == intent
+
+
+@pytest.mark.parametrize("text", ["confirmo", "mañana", "terminar", "hola", "verificar 1111"])
+def test_fixture_helpers_reject_production_before_any_lexical_work(monkeypatch, text):
+    from agents.collections import interpreter, onboarding
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Production input reached a fixture parser")
+
+    monkeypatch.setattr(interpreter, "_parse_mock", forbidden)
+    monkeypatch.setattr(onboarding, "normalize_text", forbidden)
+    with pytest.raises(ValueError, match="mock-only; use understand_turn"):
+        parse_turn(text, today=TODAY, provider="anthropic")
+    with pytest.raises(ValueError, match="mock-only; use understand_turn"):
+        onboarding.classify_onboarding(
+            text, SimpleNamespace(provider="anthropic", stream_responses=True)
+        )
