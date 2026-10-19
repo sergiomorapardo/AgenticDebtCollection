@@ -1020,3 +1020,41 @@ print("registered graph + semantic turns + playback retry + hangup: OK")
     )
     assert result.returncode == 0, result.stderr
     assert "hangup: OK" in result.stdout
+
+
+def test_offer_id_enforces_playback_even_after_reply_stage_changes(voice_api, session, monkeypatch):
+    retry_audio = VoiceSession.retry_audio
+
+    def changed_reply(self):
+        if self.reply.get("offer_id"):
+            self.reply["stage"] = "awaiting_terms"
+        return retry_audio(self)
+
+    monkeypatch.setattr(VoiceSession, "retry_audio", changed_reply)
+    state = api_post(voice_api, "start").json()
+    for text in ["123456789", "1111"]:
+        state = finish_playback(voice_api, state)
+        state = api_post(voice_api, "text", state=state, payload={"text": text}).json()
+    state = finish_playback(voice_api, state)
+    session.speech.fail = True
+    state = api_post(
+        voice_api, "text", state=state, payload={"text": "quiero 3 cuotas desde 2026-10-20"}
+    ).json()
+    assert state["details"]["stage"] == "awaiting_terms" and state["details"]["offer_id"]
+    assert not state["ready"] and not state["audio_id"]
+    assert api_post(voice_api, "text", state=state, payload={"text": "confirmo"}).status_code == 400
+    assert api_post(voice_api, "recording", state=state, content=b"demo").status_code == 400
+    assert not session.speech.transcriptions
+    session.speech.fail = False
+    state = api_post(voice_api, "retry", state=state).json()
+    assert state["audio_id"] and not state["ready"]
+    assert finish_playback(voice_api, state)["ready"]
+
+
+def test_session_offer_id_blocks_direct_submissions_after_stage_change(session):
+    offer(session)
+    session.reply["stage"] = "awaiting_terms"
+    with pytest.raises(ValueError, match="Espera"):
+        session.send("confirmo")
+    session.acknowledge_playback(session.audio)
+    session.check_turn()

@@ -205,7 +205,8 @@ ignored `.validation/`.
 
 Each submitted human turn follows the registered graph's `understand_message` and
 `route_chat_message` nodes. Voice does not run a second intent classifier. Playback gating
-applies to every text/audio reply to an unheard offer, regardless of the words used.
+applies to every text/audio reply to an unheard offer, identified by `awaiting_confirmation`
+or a nonempty `offer_id`, regardless of the words used.
 Hang up closes only the local voice transport without inventing a customer utterance,
 calling the model, or writing a payment agreement. It releases the graph lease even when
 interpretation is unavailable. It does not change the persisted business outcome.

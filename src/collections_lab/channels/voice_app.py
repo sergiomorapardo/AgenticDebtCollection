@@ -116,7 +116,7 @@ def create_app(
             and (
                 call.played_audio == call.audio
                 if call.audio
-                else reply["stage"] != "awaiting_confirmation"
+                else not call.requires_offer_playback()
             ),
             "audio_id": audio_id,
             "audio_url": f"/api/audio/{audio_id}" if audio_id else None,

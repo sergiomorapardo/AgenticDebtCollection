@@ -457,13 +457,19 @@ class VoiceSession:
             self.release_graph()
             return self.reply
 
+    def requires_offer_playback(self):
+        return bool(
+            self.reply
+            and not self.reply["finished"]
+            and (self.reply["stage"] == "awaiting_confirmation" or self.reply.get("offer_id"))
+        )
+
     def check_turn(self):
         if self.failed:
             raise VoiceInputError("El turno falló. Finaliza esta llamada antes de continuar.")
         if self.reply and self.reply["finished"]:
             raise VoiceInputError("Esta sesión terminó. Inicia una nueva conversación.")
-        pending = self.reply and self.reply["stage"] == "awaiting_confirmation"
-        if pending and (not self.audio or self.played_audio != self.audio):
+        if self.requires_offer_playback() and (not self.audio or self.played_audio != self.audio):
             raise VoiceInputError(
                 "Espera a que termine la oferta antes de responder. "
                 "Si no suena, pulsa Escuchar mensaje; si falló, pulsa Reintentar audio."
