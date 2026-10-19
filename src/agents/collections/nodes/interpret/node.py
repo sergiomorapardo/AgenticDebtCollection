@@ -7,33 +7,90 @@ from langgraph.runtime import Runtime
 
 from agents.collections.interpreter import parse_turn
 from agents.collections.runtime import AppContext, resolve_context
+from agents.collections.semantic_state import current_understanding, matches_confirmation_context
 from agents.collections.state import State
 
 
 def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     ctx = resolve_context(runtime)
     session = dict(state["session"])
+    understanding = current_understanding(state)
     try:
-        parsed = parse_turn(
-            state["text"],
-            today=ctx.today,
-            provider=ctx.provider,
-            model=ctx.model,
-            context=json.dumps(
-                {
-                    "stage": session["stage"],
-                    "terms": session["draft_terms"],
-                    "dialogue": session.get("dialogue", {}),
-                    "recent_turns": session.get("history", [])[-4:],
-                },
-                ensure_ascii=False,
-            ),
-        )
+        if understanding is not None:
+            if understanding.status == "model_error":
+                raise ValueError("Semantic interpretation unavailable")
+            parsed = understanding.turn
+        else:
+            parsed = parse_turn(
+                state["text"],
+                today=ctx.today,
+                provider=ctx.provider,
+                model=ctx.model,
+                context=json.dumps(
+                    {
+                        "stage": session["stage"],
+                        "terms": session["draft_terms"],
+                        "dialogue": session.get("dialogue", {}),
+                        "recent_turns": session.get("history", [])[-4:],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return {
             "intent_route": "response",
             "response_text": "No pude interpretar la respuesta por un error del servicio. No registré ningún acuerdo; puedes reintentar.",
         }
+    if understanding is not None:
+        if parsed.intent == "accept_offer" and (
+            parsed.acceptance != "unconditional_current_offer"
+            or session["stage"] != "awaiting_confirmation"
+            or not session.get("pending_offer_id")
+            or not matches_confirmation_context(state)
+            or parsed.amount_is_capacity
+            or parsed.frequency != "unspecified"
+            or any(
+                value is not None
+                for value in (parsed.amount_cop, parsed.payment_date, parsed.installments)
+            )
+        ):
+            parsed = type(parsed).model_validate(
+                {
+                    **parsed.model_dump(),
+                    "intent": "unclear",
+                    "acceptance": "conditional" if parsed.acceptance == "conditional" else "none",
+                }
+            )
+        if parsed.acceptance == "conditional" and parsed.intent in {"accept_offer", "unclear"}:
+            parsed = parsed.model_copy(update={"intent": "reject_offer"})
+        if (
+            session.get("dialogue", {}).get("awaiting") == "frequency"
+            and parsed.frequency in {"monthly", "one_off"}
+            and parsed.intent in {"unclear", "counteroffer", "promise", "negotiate"}
+        ):
+            amount = parsed.amount_cop or session["draft_terms"].get("amount_cop")
+            if amount:
+                monthly = parsed.frequency == "monthly"
+                parsed = parsed.model_copy(
+                    update={
+                        "intent": "counteroffer" if monthly else "promise",
+                        "amount_cop": amount,
+                        "amount_is_capacity": monthly,
+                    }
+                )
+        if parsed.intent in {"options", "continue", "no_capacity", "scope", "history", "greeting"}:
+            if parsed.amount_cop is not None and parsed.amount_is_capacity:
+                session["dialogue"] = {
+                    **session.get("dialogue", {}),
+                    "monthly_capacity_cop": parsed.amount_cop,
+                }
+            session.update(pending_offer_id=None, draft_terms={}, stage="ready")
+            return {
+                "session": session,
+                "interpretation": parsed.model_dump(mode="json"),
+                "intent_route": "negotiation",
+                "response_text": "",
+            }
     if parsed.intent in {"off_topic", "complaint", "clarify_process"}:
         # A conversational "yes" must not accept an earlier financial proposal.
         session["pending_offer_id"] = None
@@ -44,24 +101,29 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "intent_route": "negotiation",
             "response_text": "",
         }
-    if session.get("dialogue", {}).get("awaiting") == "frequency" and state[
-        "text"
-    ].strip().casefold() in {"al mes", "cada mes", "mensual"}:
+    if (
+        understanding is None
+        and session.get("dialogue", {}).get("awaiting") == "frequency"
+        and state["text"].strip().casefold() in {"al mes", "cada mes", "mensual"}
+    ):
         amount = session["draft_terms"].get("amount_cop")
         if amount:
             parsed = parsed.model_copy(
                 update={"intent": "counteroffer", "amount_cop": amount, "amount_is_capacity": True}
             )
-    if session.get("dialogue", {}).get("awaiting") == "frequency" and state[
-        "text"
-    ].strip().casefold() in {
-        "un único abono",
-        "un unico abono",
-        "un abono",
-        "una sola vez",
-        "único",
-        "unico",
-    }:
+    if (
+        understanding is None
+        and session.get("dialogue", {}).get("awaiting") == "frequency"
+        and state["text"].strip().casefold()
+        in {
+            "un único abono",
+            "un unico abono",
+            "un abono",
+            "una sola vez",
+            "único",
+            "unico",
+        }
+    ):
         amount = session["draft_terms"].get("amount_cop")
         if amount:
             parsed = parsed.model_copy(
@@ -69,7 +131,8 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             )
     # A bare amount answers the preceding capacity question, never accepts an offer.
     if (
-        parsed.intent == "unclear"
+        understanding is None
+        and parsed.intent == "unclear"
         and parsed.amount_cop
         and session.get("dialogue", {}).get("awaiting") == "capacity"
     ):
@@ -88,6 +151,9 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         "dispute": "handoff",
         "request_human": "handoff",
         "end": "close",
+        "decline": "close",
+        "identity": "response",
+        "verification_code": "response",
         "unclear": "response",
         "refuse": "negotiation",
         "hardship": "negotiation",
