@@ -174,3 +174,61 @@ def test_internal_semantics_cannot_be_injected_via_public_cli_input(runtime, cal
     assert result["semantic_result"]["turn"]["intent"] == "complaint"
     graph.invoke(state(), context=runtime.context)
     assert len(calls) == 1
+
+
+def test_studio_recovers_committed_receipt_after_chat_cache_failure(runtime, monkeypatch):
+    import hashlib
+
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agents.collections.agent import build_graph
+    from agents.collections.memory import ConflictError
+
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "entry-receipt"}}
+
+    def send(text, event):
+        return graph.invoke(
+            {"messages": [HumanMessage(content=text, id=event)]},
+            config=config,
+            context=runtime.context,
+        )
+
+    send("1000000001", "identify")
+    send("1111", "verify")
+    proposal = send("quiero 3 cuotas desde 2026-10-20", "proposal")
+    assert proposal["reply"]["stage"] == "awaiting_confirmation"
+    save_reply = ChatMemory.save_reply
+
+    def fail_agreement_cache(self, thread_id, event_id, digest, response):
+        if response["stage"] == "agreed":
+            raise RuntimeError("Injected chat cache interruption")
+        return save_reply(self, thread_id, event_id, digest, response)
+
+    monkeypatch.setattr(ChatMemory, "save_reply", fail_agreement_cache)
+    with pytest.raises(RuntimeError, match="Injected chat cache interruption"):
+        send("confirmo", "confirm")
+    repository = runtime.context.repository
+    memory = ChatMemory(repository)
+    binding = memory.binding("entry-receipt")
+    event = hashlib.sha256(json.dumps(["entry-receipt", "confirm"]).encode()).hexdigest()
+    receipt = repository.get_event(binding["session_id"], event, event_hash("demo-001", "confirmo"))
+    assert receipt["stage"] == "agreed" and len(repository.agreements()) == 1
+    assert memory.replay("entry-receipt", event, hashlib.sha256(b"confirmo").hexdigest()) is None
+    monkeypatch.setattr(ChatMemory, "save_reply", save_reply)
+    classifier_calls = []
+
+    def unavailable_model(*args, **kwargs):
+        classifier_calls.append(args)
+        raise AssertionError("A committed business event must bypass classification")
+
+    monkeypatch.setattr(semantic_entry.semantic, "understand_turn", unavailable_model)
+    # Even before repairing the chat cache, conflicting content must be rejected by
+    # the authoritative business event rather than classified as a new request.
+    with pytest.raises(ConflictError):
+        send("no acepto", "confirm")
+    recovered = send("confirmo", "confirm")
+    assert recovered["reply"] == receipt
+    assert recovered["messages"][-1].content == receipt["text"]
+    assert memory.replay("entry-receipt", event, hashlib.sha256(b"confirmo").hexdigest()) == receipt
+    assert not classifier_calls and len(repository.agreements()) == 1
