@@ -72,6 +72,11 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                     }
                 )
         if parsed.intent in {"options", "continue", "no_capacity", "scope", "history", "greeting"}:
+            if parsed.amount_cop is not None and parsed.amount_is_capacity:
+                session["dialogue"] = {
+                    **session.get("dialogue", {}),
+                    "monthly_capacity_cop": parsed.amount_cop,
+                }
             session.update(pending_offer_id=None, draft_terms={}, stage="ready")
             return {
                 "session": session,
