@@ -124,7 +124,7 @@ def test_structured_interpreter_has_no_identity_authority(chat, monkeypatch):
 
         def invoke(self, messages):
             captured.append(messages[-1][1])
-            return {"intent": "willing"}
+            return {"intent": "continue"}
 
     monkeypatch.setitem(sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=Model))
     ctx.provider = "anthropic"
@@ -138,10 +138,13 @@ def test_structured_interpreter_has_no_identity_authority(chat, monkeypatch):
 
 def test_model_failure_keeps_thread_open_and_reports_error(chat, monkeypatch):
     send, ctx = chat
-    from agents.collections import onboarding
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
 
     monkeypatch.setattr(
-        onboarding, "classify_onboarding", lambda *args: (_ for _ in ()).throw(TimeoutError())
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(), "model_error"),
     )
     result = send("que hay")["reply"]
     assert result["interpretation_status"] == "model_error"

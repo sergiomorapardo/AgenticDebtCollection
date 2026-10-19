@@ -13,6 +13,7 @@ class InputState(TypedDict):
 
 
 class State(InputState, total=False):
+    semantic_result: dict | None
     session: dict
     interpretation: dict
     intake_route: Literal["interpret", "response", "close"]
