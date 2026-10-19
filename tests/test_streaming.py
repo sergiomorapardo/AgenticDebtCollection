@@ -255,3 +255,36 @@ def test_actual_graph_stream_filters_split_markers_before_callbacks_and_persiste
     assert replay["reply"] == final["reply"] and len(replay["messages"]) == 2
     assert MarkerStreamingModel.calls == 1
     assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_whitespace_only_stream_returns_visible_error_and_persists_exact_output(
+    setup, monkeypatch, interrupted
+):
+    graph, ctx, config = setup
+    MarkerStreamingModel.pieces = ("  ", "\n", "\t")
+    MarkerStreamingModel.interrupt = interrupted
+    MarkerStreamingModel.consumed.clear()
+    monkeypatch.setitem(
+        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=MarkerStreamingModel)
+    )
+    chunks = []
+    request = {"messages": [HumanMessage(content="¿Eres un bot?", id="whitespace")]}
+    for mode, value in graph.stream(
+        request, config=config, context=ctx, stream_mode=["messages", "values"]
+    ):
+        if mode == "values":
+            final = value
+        elif isinstance(value[0], AIMessageChunk):
+            chunks.append(value[0])
+            MarkerStreamingModel.consumed.set()
+    assert final["reply"]["wording_status"] == "model_error"
+    assert "No pude generar la respuesta" in final["reply"]["text"]
+    assert (
+        "".join(chunk.content for chunk in chunks)
+        == final["reply"]["text"]
+        == final["messages"][-1].content
+    )
+    assert all(chunk.id == final["reply"]["message_id"] for chunk in chunks)
+    assert graph.invoke(request, config=config, context=ctx)["reply"] == final["reply"]
+    assert not ctx.repository.agreements()

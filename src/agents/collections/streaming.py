@@ -58,18 +58,18 @@ class CustomerStreamModel(BaseChatModel):
                     )
                     visible = filtered.feed(raw)
                     if visible:
-                        emitted = True
+                        emitted = emitted or bool(visible.strip())
                         yield ChatGenerationChunk(message=AIMessageChunk(content=visible))
                 tail = filtered.finish()
                 if tail:
-                    emitted = True
+                    emitted = emitted or bool(tail.strip())
                     yield ChatGenerationChunk(message=AIMessageChunk(content=tail))
                 if not emitted:
                     raise ValueError("Empty customer response")
             except (APIError, ValueError, TimeoutError, ConnectionError):
                 tail = filtered.finish()
                 if tail:
-                    emitted = True
+                    emitted = emitted or bool(tail.strip())
                     yield ChatGenerationChunk(message=AIMessageChunk(content=tail))
                 self.outcome = "interrupted" if emitted else "model_error"
                 notice = (
