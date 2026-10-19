@@ -58,6 +58,7 @@ def test_grounded_reply_is_contextual_and_never_writes_agreements(setup, monkeyp
     assert set(observed[0][1]) == {
         "reference",
         "current_message",
+        "mentions_internal_marker",
         "recent_dialogue",
         "intent",
         "previous_draft_rejected",
@@ -227,3 +228,125 @@ def test_writer_receives_full_current_message_and_bounded_private_history():
     assert "test@example.com" not in str(payload)
     assert len(payload["recent_dialogue"]) == 4
     assert len(payload["recent_dialogue"][0]["user"]) == 600
+
+
+@pytest.mark.parametrize("marker", ["[number]", "[redacted]", "<number_0>"])
+def test_reviewed_wording_rejects_internal_markers_before_model_review(setup, monkeypatch, marker):
+    _, runtime = setup
+
+    def provider(ctx, schema, system, payload):
+        assert schema is wording.ReplyDraft
+        return wording.ReplyDraft(text=f"Mencionaste {marker}; ¿qué necesitas aclarar?")
+
+    monkeypatch.setattr(wording, "_request", provider)
+    current = state()
+    reference = current["response_text"]
+    current.update(wording.prepare_reply(current, runtime))
+    for _ in range(2):
+        current.update(wording.draft_reply(current, runtime))
+        current.update(wording.review_reply(current, runtime))
+    assert current["response_text"] == reference
+    assert current["wording_status"] == "rejected"
+
+
+def test_wording_payload_does_not_recycle_historical_markers_or_identifiers():
+    import json
+
+    from agents.collections.customer_text import contains_internal_marker
+
+    current = state()
+    current.update(wording_reference=current["response_text"], text="cuotas de 1 peso, [number]")
+    current["session"]["history"] = [
+        {
+            "user": "123456789 test@example.com",
+            "assistant": "de [number] pesos, <number_0> [redacted]",
+        }
+    ]
+    encoded = json.dumps(wording._dialogue_payload(current), ensure_ascii=False)
+    assert not contains_internal_marker(encoded)
+    assert "123456789" not in encoded and "test@example.com" not in encoded
+    assert "una cifra" in encoded
+
+
+@pytest.mark.parametrize(
+    "terms,expected",
+    [
+        ({"intent": "negotiate", "installments": 1000}, "1,000 cuotas"),
+        ({"intent": "negotiate", "amount_cop": 1, "frequency": "monthly"}, "1 COP"),
+    ],
+)
+def test_invalid_plan_is_explained_by_backend_without_wording_or_agreement(
+    setup, monkeypatch, terms, expected
+):
+    from agents.collections import semantic
+    from agents.collections.chat_memory import ChatMemory
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    ctx, _ = setup
+    ctx.provider = "mock"
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "invalid-plan"}}
+
+    def send(text, event):
+        return graph.invoke(
+            {"messages": [HumanMessage(content=text, id=event)]}, config=config, context=ctx
+        )
+
+    send("123456789", "identify")
+    send("1111", "verify")
+    send("3 cuotas mañana", "old-offer")
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(**terms), "classified"),
+    )
+    ctx.provider = "anthropic"
+    monkeypatch.setattr(
+        wording, "_request", lambda *args: pytest.fail("Financial boundary must not be rewritten")
+    )
+    result = send("An invalid plan interpreted by the model", "invalid")
+    assert expected in result["reply"]["text"]
+    assert "3 cuotas" in result["reply"]["text"] and "200,000 COP" in result["reply"]["text"]
+    assert result["reply"]["offer_id"] is None
+    assert result["reply"]["stage"] == ("handoff" if terms.get("installments") else "ready")
+    assert not ctx.repository.agreements()
+    session_id = ChatMemory(ctx.repository).binding("invalid-plan")["session_id"]
+    assert ctx.repository.get_session(session_id)["draft_terms"] == {}
+    assert send("An invalid plan interpreted by the model", "invalid")["reply"] == result["reply"]
+
+
+@pytest.mark.parametrize("frequency", ["unspecified", "one_off"])
+def test_small_amount_without_monthly_recurrence_is_not_rejected_as_installment(
+    setup, monkeypatch, frequency
+):
+    from agents.collections import semantic
+    from agents.collections.chat_memory import ChatMemory
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    ctx, _ = setup
+    ctx.provider = "mock"
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "ambiguous-amount"}}
+    for index, text in enumerate(["123456789", "1111", "qué opciones tengo"]):
+        graph.invoke(
+            {"messages": [HumanMessage(content=text, id=str(index))]}, config=config, context=ctx
+        )
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(
+            TurnUnderstanding(intent="negotiate", amount_cop=1000, frequency=frequency),
+            "classified",
+        ),
+    )
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="Un abono pequeño", id="amount")]},
+        config=config,
+        context=ctx,
+    )
+    assert "No puedo ofrecer cuotas" not in result["reply"]["text"]
+    assert "único abono" in result["reply"]["text"]
+    assert result["reply"]["offer_id"] is None
+    session_id = ChatMemory(ctx.repository).binding("ambiguous-amount")["session_id"]
+    assert ctx.repository.get_session(session_id)["dialogue"]["awaiting"] == "frequency"
+    assert not ctx.repository.agreements()

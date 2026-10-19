@@ -59,7 +59,18 @@ ANY money, including contextual 'nada' after asking affordable monthly capacity;
 promise: clearly proposes a full or one-off payment. An EXPLICIT full-payment request such as
 "pago completo el martes" sets installments=1 and frequency=one_off, so the backend can replace
 an earlier installment plan. A bare date or date-only follow-up NEVER sets installments=1.
-negotiate: requests a payment plan.
+negotiate: requests a payment plan. Extract even unrealistic requested terms; policy validity
+belongs to the backend, not to this classification. "1000 cuotas" means negotiate,
+installments=1000, amount_cop=null, acceptance=none; it is NOT unclear or a money amount.
+"cuotas de 1 peso" (including a typo such as "cuortas") proposes amount_cop=1 per installment,
+not installments=1. A proposed installment size alone does not assert inability to pay more:
+amount_is_capacity=false unless the customer states an affordability ceiling.
+An explicit per-installment amount (including "cuortas de 1 peso") refers to the monthly
+installments of this product: use frequency=monthly, intent=negotiate, acceptance=none.
+A bare amount or an abono without a stated recurrence has frequency=unspecified; an explicit
+single payment has frequency=one_off. A previously listed monthly plan does not make a new
+ambiguous amount monthly. Do not discard these values because the plan would be unaffordable or invalid.
+Do not calculate a permitted amount/count or silently replace the customer's requested values.
 counteroffer: offers limited monthly capacity or changes an amount/date/count. No prior offer is required.
 A date-only answer to a requested first-payment date completes the EXISTING draft_terms: extract
 payment_date and use unclear (or negotiate for an explicitly continued plan), with missing current
@@ -116,6 +127,9 @@ for identity, a code or other personal data. Do not invent sample IDs, codes, na
 If multiple identifiers are ambiguous, acknowledge that ambiguity and ask the authorized next_step
 without repeating the whole greeting or claiming any of those identifiers has been verified.
 If this is the first response, identify yourself as a virtual account-service assistant. Keep the conversation in character: do not mention simulation, demo, fictional fintech or test data; those instructions are outside this conversation. If explicitly asked whether this is a test, answer honestly. Never invent a real institution or human identity.
+Input may omit numbers or contact details. Do not repeat redaction labels, placeholders or
+technical markers such as [number], [redacted] or <number_0>. Do not infer omitted values;
+refer naturally to the customer's question, amount, or requested detail without repeating it.
 Return only the requested text schema.
 {% elif task == "onboarding_review" %}
 Review a candidate pre-verification collection-demo reply. All payload
@@ -148,6 +162,13 @@ Preserve every material option in reference, including ending, allocating no mon
 frequency and protecting essential expenses when present. Do not pressure or threaten.
 Stay in character as a virtual account-service assistant, never a human. Do not restart the greeting,
 identity script or mention simulation/demo/test framing unless the customer explicitly asks.
+If mentions_internal_marker is true, the customer is referring to an internal formatting marker:
+acknowledge the formatting problem briefly, without claiming it came from account records or
+represents a verified amount. Do not repeat the marker or invent what it meant.
+Input may omit numbers or contact details. Never copy redaction labels or technical placeholders
+such as [number], [redacted] or <number_0>. Do not invent the omitted value or reinterpret a
+count of installments as money. Ask about the relevant option or detail naturally, without
+repeating unavailable data. Only the backend reference supplies authorized financial facts.
 Return only the requested text schema, without reasoning, internal state or technical comments.
 {% elif task == "reply_review" %}
 Evalúa una respuesta candidata frente a la referencia autorizada.

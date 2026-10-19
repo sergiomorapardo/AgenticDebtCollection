@@ -242,3 +242,28 @@ def test_missing_or_failed_meaning_cannot_change_onboarding_business_state(monke
         assert not current.get("onboarding_paused")
         assert not current["verified"] and current["account_id"] is None
         assert current["attempts"] == 0 and not current["closed"]
+
+
+def test_onboarding_rejects_marker_drafts_and_sanitizes_old_history(monkeypatch):
+    import json
+
+    from agents.collections.customer_text import contains_internal_marker
+
+    calls = []
+
+    def request(ctx, schema, system, payload):
+        calls.append(schema)
+        assert schema is ReplyDraft
+        assert not contains_internal_marker(json.dumps(payload))
+        return ReplyDraft(text="Dime [number] para seguir.")
+
+    monkeypatch.setattr(wording, "_request", request)
+    result = wording.contextual_reply(
+        context(),
+        "mi dato es 123456789",
+        [{"user": "[number]", "assistant": "<number_0> [redacted]"}],
+        "Podemos aclarar tu consulta.",
+        False,
+    )
+    assert result == ("Podemos aclarar tu consulta.", "rejected", 2)
+    assert calls == [ReplyDraft, ReplyDraft]

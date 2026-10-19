@@ -8,27 +8,36 @@ flowchart LR
     I --> B{Business response?}
     B -->|Offer, confirmation, identity, terminal outcome| V[Validate and persist in backend]
     V --> F
-    B -->|General conversational prose| S[Haiku token stream]
-    S --> C[Show text as generated]
-    S --> P[Persist completed response with the same message ID]
+    B -->|General conversational prose| S[Private Haiku token stream]
+    S --> G[Incremental internal-marker filter]
+    G --> C[Native messages stream: filtered fragments only]
+    G --> P[Persist exactly the displayed text and message ID]
 ```
 
 `COLLECTIONS_RESPONSE_MODE=streaming` is the local-server default. `reviewed` restores
 whole-text review and its bounded retry loop. The offline mock remains deterministic.
 
-- Streaming prose has **no whole-text reviewer before display**. Prompts constrain scope;
+- Streaming prose has **no whole-text reviewer before display**. An incremental filter removes
+  known internal redaction markers, including markers split across provider chunks. Prompts constrain scope;
   backend checks still control identity, eligible offers and agreement writes. Generated
   words do not authorize business actions, but wording is not guaranteed by those checks.
 - Every new human message is interpreted, including greetings, identification, dates,
   confirmations and messages sent after closure. Only replay and empty CLI initialization skip it.
 - First greetings and identity instructions need no additional generative wording call.
 - Conversational wording receives the current message, a bounded redacted history and the
-  authorized next step. Financial receipts retain exact backend amounts and dates.
+  authorized next step. Wording input uses natural references for omitted values and sanitizes
+  historical internal markers. The interpreter retains its separate structured identity-token
+  contract. Financial receipts retain exact backend amounts and dates.
 - Intent extraction and reviewed-mode drafts detach graph streaming callbacks and carry
   `langsmith:nostream`; only customer prose is streamed. Agent Server 0.15.4 does not suppress
   raw internal events using that tag alone. Internal calls therefore do not inherit the graph's
   streaming callback or its nested tracing callback; this is a tracing tradeoff, not a claim
   that tracing is globally disabled.
+- Raw provider chunks run without inherited graph callbacks; a chat-model adapter emits only
+  filtered chunks. This prevents a raw marker from reaching Studio before filtering. Only a
+  possible marker prefix is buffered; ordinary prose streams immediately. Known markers become
+  a neutral reference, never a reconstructed secret or invented amount. This is a marker filter,
+  not a general content or financial correctness guarantee.
 - LangGraph/Studio consumes the native `messages` stream. Preserve the streamed message ID
   when applying the final state; otherwise clients may render duplicate assistant bubbles.
 - Interrupted prose is marked `wording_status=interrupted`; no automatic regeneration after
