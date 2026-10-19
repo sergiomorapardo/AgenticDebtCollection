@@ -227,3 +227,41 @@ def test_writer_receives_full_current_message_and_bounded_private_history():
     assert "test@example.com" not in str(payload)
     assert len(payload["recent_dialogue"]) == 4
     assert len(payload["recent_dialogue"][0]["user"]) == 600
+
+
+@pytest.mark.parametrize("marker", ["[number]", "[redacted]", "<number_0>"])
+def test_reviewed_wording_rejects_internal_markers_before_model_review(setup, monkeypatch, marker):
+    _, runtime = setup
+
+    def provider(ctx, schema, system, payload):
+        assert schema is wording.ReplyDraft
+        return wording.ReplyDraft(text=f"Mencionaste {marker}; ¿qué necesitas aclarar?")
+
+    monkeypatch.setattr(wording, "_request", provider)
+    current = state()
+    reference = current["response_text"]
+    current.update(wording.prepare_reply(current, runtime))
+    for _ in range(2):
+        current.update(wording.draft_reply(current, runtime))
+        current.update(wording.review_reply(current, runtime))
+    assert current["response_text"] == reference
+    assert current["wording_status"] == "rejected"
+
+
+def test_wording_payload_does_not_recycle_historical_markers_or_identifiers():
+    import json
+
+    from agents.collections.customer_text import contains_internal_marker
+
+    current = state()
+    current.update(wording_reference=current["response_text"], text="cuotas de 1 peso, [number]")
+    current["session"]["history"] = [
+        {
+            "user": "123456789 test@example.com",
+            "assistant": "de [number] pesos, <number_0> [redacted]",
+        }
+    ]
+    encoded = json.dumps(wording._dialogue_payload(current), ensure_ascii=False)
+    assert not contains_internal_marker(encoded)
+    assert "123456789" not in encoded and "test@example.com" not in encoded
+    assert "una cifra" in encoded
