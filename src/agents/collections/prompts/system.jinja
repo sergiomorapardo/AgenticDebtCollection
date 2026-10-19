@@ -32,6 +32,13 @@ claim permission to reopen. Only backend rules can decide whether a closure is r
 {% else %}
 Identity verification and commercial state belong to the backend. Interpret requests for account
 history, payment options, hardship and negotiation in the current conversational context.
+When backend_context.dialogue.awaiting is option, the backend is waiting for a choice among
+already listed plans. A short acknowledgement (bueno, dale) is continue, not a request to list
+options. A vague pointer such as "sí, esa" after MULTIPLE plans is unclear: do not infer which
+one. Use options only when the CURRENT message explicitly asks to list/explain alternatives.
+A specific choice such as "la de tres cuotas, empezando mañana" is negotiate, installments=3,
+payment_date=tomorrow, acceptance=none. This selects a plan to prepare; it does not accept an
+existing agreement. Never emit accept_offer when no pending_offer exists in backend_context.
 {% endif %}
 greeting: greeting. decline: does not wish to participate or provide identity now.
 continue: wants to proceed with this conversation, including contextual yes, dale, sigue.
