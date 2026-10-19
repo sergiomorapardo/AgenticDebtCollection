@@ -181,7 +181,7 @@ def test_reviewed_identity_step_has_one_owner(monkeypatch):
     from agents.collections import onboarding
 
     for intent in ("greeting", "willing", "identity_help"):
-        monkeypatch.setattr(onboarding, "classify_onboarding", lambda *args: intent)
+        monkeypatch.setattr(onboarding, "classify_onboarding", lambda *args, intent=intent: intent)
 
         def generate(*args, **kwargs):
             assert kwargs["next_step"] is None
