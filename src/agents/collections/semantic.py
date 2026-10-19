@@ -46,7 +46,7 @@ class TurnUnderstanding(BaseModel):
         "clarify_process",
     ] = Field(
         default="unclear",
-        description="Current meaning. Positive limited monthly capacity is counteroffer/negotiate, never no_capacity. no_capacity requires explicitly zero available money.",
+        description="Current meaning. Selecting installments from an informational menu is negotiate, NOT accept_offer: for example la de tres cuotas, empezando mañana. Acknowledging an ambiguous menu without choosing is continue/unclear. Positive limited monthly capacity is counteroffer/negotiate, never no_capacity. no_capacity requires explicitly zero available money.",
     )
     amount_cop: int | None = Field(
         default=None,
@@ -64,7 +64,10 @@ class TurnUnderstanding(BaseModel):
         description="Date explicitly supplied in this turn, resolving relative dates from today. A date-only answer completes existing terms; it does not replace the plan with a full-payment promise.",
     )
     installments: int | None = Field(default=None, gt=0, strict=True)
-    acceptance: Literal["none", "conditional", "unconditional_current_offer"] = "none"
+    acceptance: Literal["none", "conditional", "unconditional_current_offer"] = Field(
+        default="none",
+        description="Selecting a menu option, supplying a date or choosing installment count is none: it requests a proposal, not an agreement. unconditional_current_offer requires an existing backend pending_offer, awaiting_confirmation stage and unconditional consent to that exact presented schedule without new terms.",
+    )
     identity_token: int | None = Field(
         default=None,
         ge=0,
@@ -305,7 +308,7 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
         if stage == "awaiting_confirmation":
             fields["acceptance"] = "unconditional_current_offer"
         else:
-            fields["intent"] = "continue"
+            fields["intent"] = "unclear" if stage in {"closed", "agreed", "handoff"} else "continue"
     return TurnUnderstanding(**fields)
 
 

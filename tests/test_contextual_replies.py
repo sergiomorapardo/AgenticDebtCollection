@@ -163,24 +163,55 @@ def test_studio_retry_loop_is_bounded_and_next_turn_resets(setup, monkeypatch):
     assert ("review_reply", "draft_reply") in edges
 
 
-def test_exact_dates_and_confirmations_do_not_depend_on_model(monkeypatch):
+@pytest.mark.parametrize(
+    "text,stage,output",
+    [
+        ("mañana", "awaiting_terms", {"intent": "unclear", "payment_date": "2026-10-20"}),
+        (
+            "confirmo",
+            "awaiting_confirmation",
+            {"intent": "accept_offer", "acceptance": "unconditional_current_offer"},
+        ),
+        ("terminar", "ready", {"intent": "end"}),
+    ],
+)
+def test_exact_dates_confirmations_and_stops_always_reach_the_model(
+    monkeypatch, text, stage, output
+):
+    import json
     import sys
     from datetime import date
 
-    from agents.collections.interpreter import parse_turn
+    from agents.collections.semantic import TurnUnderstanding, understand_turn
 
-    def unavailable(*args, **kwargs):
-        raise AssertionError("Exact date or acceptance must not call model")
+    calls = []
+
+    class FakeModel:
+        def __init__(self, **kwargs):
+            pass
+
+        def with_structured_output(self, schema):
+            assert schema is TurnUnderstanding
+            return self
+
+        def invoke(self, messages):
+            calls.append(messages)
+            return output
 
     monkeypatch.setitem(
-        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=unavailable)
+        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=FakeModel)
     )
-    parsed = parse_turn("mañana", today=date(2026, 10, 19), provider="anthropic")
-    assert parsed.payment_date == date(2026, 10, 20)
-    assert (
-        parse_turn("confirmo", today=date(2026, 10, 19), provider="anthropic").intent
-        == "accept_offer"
+    result = understand_turn(
+        text,
+        today=date(2026, 10, 19),
+        ctx=SimpleNamespace(provider="anthropic", model="test-model"),
+        stage=stage,
     )
+    assert len(calls) == 1 and json.loads(calls[0][1][1])["current_message"] == text
+    assert result.status == "classified"
+    assert result.turn.intent == output["intent"]
+    if "payment_date" in output:
+        assert result.turn.payment_date.isoformat() == output["payment_date"]
 
 
 def test_writer_receives_full_current_message_and_bounded_private_history():

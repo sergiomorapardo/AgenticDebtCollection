@@ -103,7 +103,17 @@ def terminal_response(session, text, *, intent=None):
             prefix
             + "Tu solicitud quedó registrada para revisión. No puedo transferirte a un asesor desde aquí; no se registró un pago ni continuaré negociando en esta conversación."
         )
+    if session.get("close_reason") in {"customer_request", "repeated_refusal"}:
+        if intent in {"end", "decline", "refuse"}:
+            return "Entendido. No insistiré con el cobro ni registraré un nuevo acuerdo."
+        if intent == "off_topic":
+            return "Puedo ayudarte con dudas sobre tu cuenta; esa petición está fuera de mi alcance. No retomaré el cobro por cambiar de tema."
+        return (
+            prefix + "Dejé de insistir con el cobro porque me indicaste que no querías seguir. "
+            "Podemos aclarar dudas o registrar que no estás de acuerdo con el saldo. "
+            "Si decides revisar opciones de pago, podemos retomarlas aquí; todavía no hay un nuevo acuerdo."
+        )
     return (
-        prefix
-        + "La gestión de cobro está cerrada. Puedo explicarte este estado, pero no retomaré la negociación ni registraré otro compromiso en esta sesión."
+        prefix + "Esta gestión está cerrada y no puedo reiniciar la negociación aquí. "
+        "Puedo aclarar el estado o registrar una solicitud de revisión, sin modificar el saldo ni crear otro compromiso."
     )

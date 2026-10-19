@@ -121,19 +121,21 @@ def test_ambiguous_or_failed_interpretation_never_resumes(continuation, monkeypa
 
 
 @pytest.mark.parametrize("intent", ["end", "decline"])
-def test_semantic_decline_is_respected_on_later_turns(continuation, monkeypatch, intent):
+def test_customer_can_change_their_mind_after_declining(continuation, monkeypatch, intent):
     send, ctx, session_id = continuation
     captured = []
     model_stub(monkeypatch, {"intent": intent}, captured)
     ctx.provider = "anthropic"
     assert send("mejor lo dejamos aquí por hoy", "decline")["reply"]["stage"] == "closed"
     model_stub(monkeypatch, {"intent": "continue"}, captured)
-    assert send("sigue", "later")["reply"]["stage"] == "closed"
-    assert len(captured) == 2
     assert ctx.repository.get_session(session_id)["close_reason"] == "customer_request"
+    assert send("sigue", "later")["reply"]["stage"] == "ready"
+    assert len(captured) == 2
+    assert ctx.repository.get_session(session_id)["close_reason"] is None
+    assert not ctx.repository.agreements()
 
 
-@pytest.mark.parametrize("stage", ["closed", "agreed", "handoff"])
+@pytest.mark.parametrize("stage", ["agreed", "handoff"])
 def test_legitimate_terminal_outcomes_classify_once_without_reopening(
     continuation, monkeypatch, stage
 ):
@@ -201,4 +203,238 @@ def test_current_message_keeps_late_negation_beyond_history_excerpt_limit(
     result = send(text, "long-answer")
     assert captured[0]["current_message"].endswith(ending)
     assert result["reply"]["stage"] == "closed"
+    assert not ctx.repository.agreements()
+
+
+@pytest.fixture
+def refused_conversation(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+    ctx = AppContext(
+        SQLiteRepository(tmp_path / "refused.db"),
+        datetime.fromisoformat("2026-10-19T09:00:00-05:00"),
+    )
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "refused-conversation"}}
+
+    def send(text, event):
+        return graph.invoke(
+            {"messages": [HumanMessage(content=text, id=event)]}, config=config, context=ctx
+        )
+
+    send("123456789", "identify")
+    send("1111", "verify")
+    send("no quiero pagar", "refuse-once")
+    closed = send("no voy a pagar", "refuse-twice")
+    assert closed["reply"]["stage"] == "closed"
+    session_id = ChatMemory(ctx.repository).binding("refused-conversation")["session_id"]
+    return send, ctx, session_id
+
+
+def update_stored_session(ctx, session_id, **updates):
+    session = ctx.repository.get_session(session_id)
+    session.update(updates)
+    with ctx.repository.connection() as db:
+        db.execute("UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id))
+    return session
+
+
+def test_screenshot_refusal_then_dispute_receives_review_without_payment(refused_conversation):
+    send, ctx, session_id = refused_conversation
+    previous = ctx.repository.get_session(session_id)
+    disputed = send("no reconozco esa deuda", "dispute")
+    assert disputed["reply"]["stage"] == "handoff"
+    assert "revisión" in disputed["reply"]["text"]
+    assert "no retomaré" not in disputed["reply"]["text"]
+    assert not ctx.repository.agreements()
+    assert ctx.repository.get_account("demo-001").balance_cop == 600000
+    current = ctx.repository.get_session(session_id)
+    assert current["history"][: len(previous["history"])] == previous["history"]
+    assert current["negotiations"] == previous["negotiations"]
+    assert send("no reconozco esa deuda", "dispute")["reply"] == disputed["reply"]
+
+
+def test_refusal_then_customer_resume_can_negotiate_once_and_replay(
+    refused_conversation, monkeypatch
+):
+    send, ctx, session_id = refused_conversation
+    previous = ctx.repository.get_session(session_id)
+    update_stored_session(
+        ctx,
+        session_id,
+        pending_offer_id="stale-offer",
+        draft_terms={"installments": 2},
+        clarifications=2,
+    )
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    understand = semantic.understand_turn
+    resume_text = "quiero seguir revisando las opciones de pago"
+    calls = []
+
+    def semantic_resume(text, **kwargs):
+        if text == resume_text:
+            calls.append(text)
+            return TurnResult(TurnUnderstanding(intent="continue"), "classified")
+        return understand(text, **kwargs)
+
+    monkeypatch.setattr(semantic, "understand_turn", semantic_resume)
+    resumed = send(resume_text, "resume")
+    assert resumed["reply"]["stage"] == "ready"
+    current = ctx.repository.get_session(session_id)
+    assert current["pending_offer_id"] is None and current["draft_terms"] == {}
+    assert current["dialogue"]["refusals"] == 0 and current["clarifications"] == 0
+    assert current["negotiations"] == previous["negotiations"]
+    assert current["turns"] == previous["turns"] + 1
+    assert current["history"][: len(previous["history"])] == previous["history"]
+    assert send(resume_text, "resume")["reply"] == resumed["reply"]
+    assert calls == [resume_text]
+    assert ctx.repository.get_session(session_id)["turns"] == current["turns"]
+    assert not ctx.repository.agreements()
+    proposal = send("quiero tres cuotas desde mañana", "new-offer")
+    assert proposal["reply"]["stage"] == "awaiting_confirmation"
+    accepted = send("confirmo", "new-acceptance")
+    assert accepted["reply"]["stage"] == "agreed" and len(ctx.repository.agreements()) == 1
+    assert send("confirmo", "new-acceptance")["reply"] == accepted["reply"]
+    assert len(ctx.repository.agreements()) == 1
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+@pytest.mark.parametrize(
+    "intent,text",
+    [("reported_payment", "yo ya pagué"), ("request_human", "necesito hablar con una persona")],
+)
+def test_closed_customer_requests_reach_review_without_creating_agreement(
+    refused_conversation, monkeypatch, intent, text
+):
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    send, ctx, _ = refused_conversation
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(intent=intent), "classified"),
+    )
+    result = send(text, "review-request")
+    assert result["reply"]["stage"] == "handoff"
+    assert not ctx.repository.agreements()
+    assert ctx.repository.get_account("demo-001").balance_cop == 600000
+
+
+@pytest.mark.parametrize(
+    "intent,status",
+    [
+        ("unclear", "classified"),
+        ("complaint", "classified"),
+        ("clarify_process", "classified"),
+        ("continue", "model_error"),
+    ],
+)
+def test_ambiguity_complaint_and_model_failure_do_not_reopen(
+    refused_conversation, monkeypatch, intent, status
+):
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    send, ctx, session_id = refused_conversation
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(intent=intent), status),
+    )
+    result = send("¿y ahora qué?", "ambiguous-resume")
+    assert result["reply"]["stage"] == "closed"
+    assert ctx.repository.get_session(session_id)["close_reason"] == "repeated_refusal"
+    assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"identity_verified": False},
+        {"close_reason": "contact_blocked"},
+        {"close_reason": "identity_attempts_exhausted"},
+    ],
+)
+def test_authentication_and_contact_closures_cannot_resume(
+    refused_conversation, monkeypatch, patch
+):
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    send, ctx, session_id = refused_conversation
+    update_stored_session(ctx, session_id, **patch)
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(intent="continue"), "classified"),
+    )
+    assert send("sí, retomemos", "blocked-resume")["reply"]["stage"] == "closed"
+    assert not ctx.repository.agreements()
+
+
+def test_resume_preserves_exhausted_turn_budget(refused_conversation, monkeypatch):
+    send, ctx, session_id = refused_conversation
+    update_stored_session(ctx, session_id, turns=20, negotiations=3)
+    from agents.collections import semantic
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(intent="continue"), "classified"),
+    )
+    result = send("quiero retomar la conversación", "budget-resume")
+    assert result["reply"]["stage"] == "handoff"
+    session = ctx.repository.get_session(session_id)
+    assert session["turns"] == 21 and session["negotiations"] == 3
+    assert not ctx.repository.agreements()
+
+
+def test_reopened_studio_menu_waits_for_a_choice_without_repeating(
+    refused_conversation, monkeypatch
+):
+    send, ctx, session_id = refused_conversation
+    captured = []
+    ctx.provider = "anthropic"
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
+    menu = send("dale", "resume-menu")
+    assert "600,000 COP" in menu["reply"]["text"]
+    # Keep the contextual writer deterministic here; semantic calls still use the model stub.
+    monkeypatch.setattr(
+        "agents.collections.wording._request",
+        lambda *args: (_ for _ in ()).throw(ValueError("writer unavailable")),
+    )
+    for i, message in enumerate(("bueno", "sí, esa")):
+        result = send(message, f"ack-{i}")
+        assert "Cuál de las opciones" in result["reply"]["text"]
+        assert result["reply"]["stage"] == "ready"
+        assert result["reply"]["offer_id"] is None
+        assert ctx.repository.get_session(session_id)["dialogue"]["awaiting"] == "option"
+    assert len(captured) == 3
+    assert send("sí, esa", "ack-1")["reply"] == result["reply"]
+    assert len(captured) == 3
+    model_stub(
+        monkeypatch,
+        {"intent": "negotiate", "installments": 3, "payment_date": "2026-10-20"},
+        captured,
+    )
+    proposal = send("la de tres, empezando mañana", "select-plan")
+    assert proposal["reply"]["stage"] == "awaiting_confirmation"
+    assert "200,000 COP" in proposal["reply"]["text"]
+    assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize("text", ["ok, gracias", "dale, gracias", "gracias, hasta luego"])
+def test_polite_closure_acknowledgement_does_not_reopen(refused_conversation, monkeypatch, text):
+    send, ctx, session_id = refused_conversation
+    captured = []
+    model_stub(monkeypatch, {"intent": "unclear"}, captured)
+    ctx.provider = "anthropic"
+    result = send(text, "acknowledge-closure")
+    assert len(captured) == 1
+    assert result["reply"]["stage"] == "closed"
+    assert ctx.repository.get_session(session_id)["close_reason"] == "repeated_refusal"
     assert not ctx.repository.agreements()
