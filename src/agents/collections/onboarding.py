@@ -50,7 +50,7 @@ def classify_onboarding(text, ctx, history=None):
                     "human",
                     json.dumps(
                         {
-                            "current_message": redact_dialogue(text),
+                            "current_message": redact_dialogue(text, max_length=None),
                             "recent_dialogue": (history or [])[-4:],
                         },
                         ensure_ascii=False,
@@ -148,14 +148,14 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
             if intent not in {"willing", "identity_help"} and not (
                 not previous and intent == "greeting"
             ):
-                from agents.collections.onboarding_wording import DRAFT_PROMPT
                 from agents.collections.streaming import stream_reply
 
                 streamed = stream_reply(
                     ctx,
-                    DRAFT_PROMPT,
+                    render_prompt("onboarding_draft", stage=stage),
                     {
-                        "current_message": redact_dialogue(text),
+                        "current_message": redact_dialogue(text, max_length=None),
+                        "next_step": None if binding.get("onboarding_paused") else step,
                         "recent_dialogue": history,
                         "reference": redact_dialogue(response),
                         "intent": intent,
@@ -166,7 +166,14 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
                 response, wording_status, attempts = streamed["text"], streamed["wording_status"], 1
         else:
             response, wording_status, attempts = contextual_reply(
-                ctx, text, history, response, binding.get("onboarding_paused", False), intent=intent
+                ctx,
+                text,
+                history,
+                response,
+                binding.get("onboarding_paused", False),
+                intent=intent,
+                stage=stage,
+                next_step=step,
             )
     if status != "model_error" and (
         intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
