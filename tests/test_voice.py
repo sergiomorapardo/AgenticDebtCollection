@@ -506,3 +506,235 @@ def test_trace_reports_graph_failure_without_exception_text(voice_api, monkeypat
     trace = voice_api.get("/api/trace").json()
     assert trace["events"][0]["status"] == "error"
     assert "private-provider-secret" not in json.dumps(trace)
+
+
+def registry_fixture(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    from collections_lab.channels.voice_session import GraphRegistry
+
+    root = tmp_path / "project"
+    source = root / "src"
+    source.mkdir(parents=True)
+    name = "graph_fixture_" + uuid4().hex
+    module = source / f"{name}.py"
+    template = """from langgraph.graph import StateGraph, START, END
+builder = StateGraph(dict)
+builder.add_node("{node}", lambda state: {{"marker": "{node}"}})
+builder.add_edge(START, "{node}")
+builder.add_edge("{node}", END)
+agent = builder.compile()
+"""
+    module.write_text(template.format(node="alpha"))
+    manifest = root / "langgraph.json"
+    manifest.write_text(json.dumps({"graphs": {"collections_agent": f"./src/{name}.py:agent"}}))
+    monkeypatch.syspath_prepend(str(source))
+    return GraphRegistry(root), module, manifest, template
+
+
+def test_graph_registry_refreshes_between_calls_and_discovers_registered_graphs(
+    tmp_path, monkeypatch
+):
+    registry, module, manifest, template = registry_fixture(tmp_path, monkeypatch)
+    first = registry.catalog()
+    graph, graph_id, version = registry.acquire()
+    assert graph_id == "collections_agent"
+    assert graph.invoke({}) == {"marker": "alpha"}
+    module.write_text(template.format(node="bravo"))  # Same size and second: avoid stale pyc.
+    pending = registry.catalog()
+    assert pending["pending_update"] and pending["version"] == version
+    assert graph.invoke({}) == {"marker": "alpha"}
+    registry.release()
+    changed = registry.catalog()
+    assert changed["version"] != first["version"]
+    assert "bravo" in changed["graphs"][0]["topology"]["nodes"]
+    content = json.loads(manifest.read_text())
+    content["graphs"]["second_flow"] = content["graphs"]["collections_agent"]
+    manifest.write_text(json.dumps(content))
+    assert {item["id"] for item in registry.catalog()["graphs"]} == {
+        "collections_agent",
+        "second_flow",
+    }
+
+
+def test_graph_registry_retains_last_valid_version_on_invalid_edit(tmp_path, monkeypatch):
+    registry, module, _manifest, template = registry_fixture(tmp_path, monkeypatch)
+    first = registry.catalog()
+    module.write_text("private-secret invalid Python!")
+    failed = registry.catalog()
+    assert failed["error"] and failed["pending_update"]
+    assert failed["version"] == first["version"]
+    assert "private-secret" not in json.dumps(failed)
+    graph, _, _ = registry.acquire()
+    assert graph.invoke({}) == {"marker": "alpha"}
+    registry.release()
+    module.write_text(template.format(node="alpha"))
+    assert not registry.catalog()["error"]
+    assert registry.catalog()["version"] == first["version"]
+    module.write_text(template.format(node="delta"))
+    assert not registry.catalog()["error"]
+    assert "delta" in registry.catalog()["graphs"][0]["topology"]["nodes"]
+
+
+def test_automatic_layout_and_trace_handle_parallel_nodes_and_renamed_terminal():
+    import operator
+    from typing import Annotated, TypedDict
+
+    from langgraph.graph import END, START, StateGraph
+
+    from collections_lab.channels.voice_session import ExecutionTrace
+
+    class ParallelState(TypedDict):
+        visited: Annotated[list[str], operator.add]
+
+    builder = StateGraph(ParallelState)
+    for name in ("entry", "left", "right", "renamed_terminal"):
+        builder.add_node(name, lambda state, name=name: {"visited": [name]})
+    builder.add_edge(START, "entry")
+    builder.add_edge("entry", "left")
+    builder.add_edge("entry", "right")
+    builder.add_edge(["left", "right"], "renamed_terminal")
+    builder.add_edge("renamed_terminal", END)
+    graph = builder.compile()
+    trace = ExecutionTrace(graph, "parallel")
+    trace.begin()
+    for event in graph.stream({"visited": []}, stream_mode="debug"):
+        if event["type"] in {"task", "task_result"}:
+            trace.task(event["payload"], event["step"])
+    trace.complete()
+    snapshot = trace.snapshot()
+    paths = snapshot["transitions"]
+    assert ["left", "right"] not in paths and ["right", "left"] not in paths
+    for pair in (
+        ["entry", "left"],
+        ["entry", "right"],
+        ["left", "renamed_terminal"],
+        ["right", "renamed_terminal"],
+        ["renamed_terminal", "__end__"],
+    ):
+        assert pair in paths
+    topology = snapshot["topology"]
+    positions = topology["positions"]
+    assert len(set(map(tuple, positions.values()))) == len(topology["nodes"])
+    assert all(
+        68 < x < topology["width"] - 68 and 23 < y < topology["height"] - 23
+        for x, y in positions.values()
+    )
+
+
+def test_automatic_layout_preserves_cycles():
+    from langgraph.graph import END, START, StateGraph
+
+    from collections_lab.channels.voice_session import graph_topology
+
+    builder = StateGraph(dict)
+    builder.add_node("renamed_loop", lambda state: {})
+    builder.add_edge(START, "renamed_loop")
+    builder.add_conditional_edges("renamed_loop", lambda state: END, ["renamed_loop", END])
+    topology = graph_topology(builder.compile())
+    assert any(edge["source"] == edge["target"] == "renamed_loop" for edge in topology["edges"])
+    assert set(topology["positions"]) == set(topology["nodes"])
+
+
+def test_failed_start_preserves_new_call_for_audio_retry(voice_api, session, monkeypatch):
+    state = api_post(voice_api, "start").json()
+    api_post(voice_api, "end", state=state)
+    synthesize = session.speech.synthesize
+
+    def fail(text):
+        raise RuntimeError("private-provider-secret")
+
+    monkeypatch.setattr(session.speech, "synthesize", fail)
+    response = api_post(voice_api, "start")
+    assert response.status_code == 500
+    current = voice_api.get("/api/session").json()
+    assert current["session_id"] != state["session_id"]
+    assert current["session_id"] == voice_api.get("/api/trace").json()["session_id"]
+    assert len(current["history"]) == 2 and not current["finished"]
+    assert "private-provider-secret" not in response.text
+    monkeypatch.setattr(session.speech, "synthesize", synthesize)
+    replay = api_post(voice_api, "retry", state=current).json()
+    assert replay["audio_url"] and replay["history"] == current["history"]
+
+
+def test_session_and_audio_reads_return_immediately_while_synthesis_runs(
+    voice_api, session, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    state = finish_playback(voice_api, api_post(voice_api, "start").json())
+    entered, release = Event(), Event()
+
+    def blocked(text):
+        entered.set()
+        assert release.wait(5)
+        return b"ID3-demo"
+
+    monkeypatch.setattr(session.speech, "synthesize", blocked)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = pool.submit(
+            api_post, voice_api, "text", state=state, payload={"text": "123456789"}
+        )
+        try:
+            assert entered.wait(3)
+            current = pool.submit(voice_api.get, "/api/session").result(timeout=2).json()
+            assert current["busy"] and not current["ready"]
+            assert current["history"] == state["history"]
+            audio = pool.submit(voice_api.get, state["audio_url"]).result(timeout=2)
+            assert audio.status_code == 200 and not pending.done()
+        finally:
+            release.set()
+        assert pending.result(timeout=3).status_code == 200
+    assert not voice_api.get("/api/session").json()["busy"]
+
+
+def test_deep_validation_error_is_redacted_and_failed_call_cannot_repeat_graph(
+    voice_api, monkeypatch
+):
+    from langgraph.graph import END, START, StateGraph
+
+    import collections_lab.channels.voice_session as module
+
+    calls = []
+
+    def failed_node(state):
+        calls.append(True)
+        raise ValueError("private-graph-secret")
+
+    builder = StateGraph(dict)
+    builder.add_node("failed_node", failed_node)
+    builder.add_edge(START, "failed_node")
+    builder.add_edge("failed_node", END)
+    monkeypatch.setattr(module, "build_graph", lambda **kwargs: builder.compile())
+    result = api_post(voice_api, "start")
+    assert result.status_code == 500 and "private-graph-secret" not in result.text
+    current = voice_api.get("/api/session").json()
+    assert current["failed"] and not current["ready"]
+    assert api_post(voice_api, "text", state=current, payload={"text": "retry"}).status_code == 400
+    assert len(calls) == 1
+    assert api_post(voice_api, "end", state=current).json()["finished"]
+
+
+def test_graph_failure_rolls_back_agreement_and_blocks_repeated_turn(session, monkeypatch):
+    offer(session)
+    session.acknowledge_playback(session.audio)
+    stream = session.graph.stream
+
+    def interrupted(*args, **kwargs):
+        for mode, chunk in stream(*args, **kwargs):
+            yield mode, chunk
+            if (
+                mode == "debug"
+                and chunk["type"] == "task_result"
+                and chunk["payload"]["name"] == "response"
+            ):
+                raise RuntimeError("after committed response")
+
+    monkeypatch.setattr(session.graph, "stream", interrupted)
+    with pytest.raises(RuntimeError):
+        session.send("confirmo")
+    assert not session.context.repository.agreements()
+    with pytest.raises(ValueError, match="Finaliza"):
+        session.send("confirmo")
+    assert not session.context.repository.agreements()
