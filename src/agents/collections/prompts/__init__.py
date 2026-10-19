@@ -5,6 +5,7 @@ from typing import Literal, get_args
 from jinja2 import Environment, PackageLoader, StrictUndefined
 
 PromptTask = Literal[
+    "semantic_turn",
     "continuation",
     "onboarding_classify",
     "onboarding_draft",
