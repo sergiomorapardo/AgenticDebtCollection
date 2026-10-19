@@ -64,3 +64,17 @@ def test_terminal_tone_uses_semantic_complaint_and_never_reopens():
     assert terminal_response(session, "sin palabras", intent="complaint").startswith("Lamento")
     assert not terminal_response(session, "mal servicio", intent="continue").startswith("Lamento")
     assert session["stage"] == "closed"
+
+
+def test_checkpoint_candidate_must_still_exist_in_current_message():
+    state = {"event_id": "one", "text": "¿Qué código necesitas?"}
+    state["semantic_result"] = bind_understanding(
+        state,
+        TurnResult(
+            TurnUnderstanding(intent="verification_code", code_token=0),
+            "classified",
+            verification_candidate="1111",
+        ),
+    )
+    result = current_understanding(state)
+    assert result.status == "model_error" and result.verification_candidate is None
