@@ -134,7 +134,7 @@ Browsing another map never changes the graph executing the call. Voice calls con
 `collections_agent` and its messages/reply contract; an unrelated graph needs a voice adapter
 before it can drive a call.
 
-The registry fingerprints local Python source and the manifest. Changes are loaded automatically
+The registry fingerprints local Python source, Jinja templates (`.jinja`/`.jinja2`), and the manifest. Changes are loaded automatically
 on the next catalog read or call start when no calls hold the current graph version. Active calls
 keep their loaded graph, and the viewer reports pending updates. A syntax/import error preserves
 the last valid catalog and reports a sanitized warning. The next corrected source version is
@@ -148,7 +148,7 @@ other active sessions can also defer reload. Shorter abandoned-call expiry remai
 Reloading merely because no turn is busy would violate this per-call version guarantee.
 
 The fingerprint excludes JSON fixtures and policy data; their call-time reads do not trigger a
-pending-source notice. Catalog polls currently hash local source while holding the registry lock.
+pending-source notice. Catalog polls currently hash local source and templates while holding the registry lock.
 Incremental change detection and background catalog preparation are performance follow-ups.
 The voice turn uses a thread-local SQLite transaction. Repository-writing nodes must execute
 serially on the turn thread; parallel graph branches may be visualized but must not access this
@@ -200,3 +200,15 @@ evidence, not a physical microphone test of the new frontend. Keep live evidence
 ignored `.validation/`.
 
 [Roadmap](../../docs/ROADMAP.md) · [Validation](../../docs/VALIDATION.md)
+
+### Semantic workflow compatibility
+
+Each submitted human turn follows the registered graph's `understand_message` and
+`route_chat_message` nodes. Voice does not run a second intent classifier. Playback gating
+applies to every text/audio reply to an unheard offer, regardless of the words used.
+Hang up closes only the local voice transport without inventing a customer utterance,
+calling the model, or writing a payment agreement. It releases the graph lease even when
+interpretation is unavailable. It does not change the persisted business outcome.
+The graph's terminal `finished` replies still end the voice call. Customer-led continuation
+after a closed collection outcome is available through the text workflow; resuming the same
+business session across separate voice calls remains unsupported by this isolated demo.

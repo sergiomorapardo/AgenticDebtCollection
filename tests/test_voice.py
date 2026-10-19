@@ -162,7 +162,7 @@ def test_failed_offer_audio_cannot_be_acknowledged_but_can_be_ended(session):
     session.send("quiero 3 cuotas desde 2026-10-20")
     with pytest.raises(ValueError, match="Espera a que termine"):
         session.send("confirmo")
-    assert session.send("terminar")["finished"]
+    assert session.end_call()["finished"]
     assert not session.context.repository.agreements()
 
 
@@ -405,6 +405,8 @@ def test_execution_trace_matches_graph_and_excludes_customer_content(session):
     assert set(trace["topology"]["nodes"]) == set(session.graph.get_graph().nodes)
     assert [event["name"] for event in trace["events"]] == [
         "human_input",
+        "understand_message",
+        "route_chat_message",
         "identify_customer",
         "assistant_message",
         "text_to_speech",
@@ -836,28 +838,6 @@ def test_idle_trace_uses_refreshed_catalog(session, tmp_path, monkeypatch):
         assert not second["events"] and not second["session_id"]
 
 
-def test_registry_call_captures_current_end_intent_helper(session, tmp_path, monkeypatch):
-    from agents.collections import conversation
-
-    class Registry:
-        def acquire(self):
-            return session.graph, "collections_agent", "test-version"
-
-        def release(self):
-            pass
-
-    monkeypatch.setattr(conversation, "requests_end", lambda text: text == "custom hangup")
-    call = VoiceSession(
-        session.context, session.speech, tmp_path / "reload", graph_registry=Registry()
-    )
-    call.reply = {"stage": "awaiting_confirmation", "finished": False, "text": "Offer"}
-    call.check_turn("custom hangup")
-    monkeypatch.setattr(conversation, "requests_end", lambda text: False)
-    call.check_turn("custom hangup")  # Keep this call's loaded helper for its entire lease.
-    with pytest.raises(ValueError, match="Espera"):
-        call.check_turn("other")
-
-
 def test_failed_initial_publication_keeps_call_reachable_for_hangup(voice_api, monkeypatch):
     def broken_details(self):
         raise RuntimeError("publication failure")
@@ -906,3 +886,137 @@ def test_hangup_remains_finished_during_permanent_snapshot_failure(voice_api, mo
     current = voice_api.get("/api/session").json()
     assert current["finished"] and not current["busy"] and not current["ready"]
     assert state["session_id"] in released
+
+
+def test_unheard_offer_cannot_use_text_as_a_playback_bypass(session, monkeypatch):
+    from agents.collections import semantic
+
+    offer(session)
+    calls = []
+
+    def accept(*args, **kwargs):
+        calls.append(True)
+        return semantic.TurnResult(
+            semantic.TurnUnderstanding(
+                intent="accept_offer", acceptance="unconditional_current_offer"
+            ),
+            "classified",
+        )
+
+    monkeypatch.setattr(semantic, "understand_turn", accept)
+    with pytest.raises(ValueError, match="Espera"):
+        session.send("terminar")
+    assert not calls and not session.context.repository.agreements()
+    assert session.end_call()["finished"]
+    assert not calls
+
+
+def test_hangup_does_not_call_semantic_or_speech_services(voice_api, session, monkeypatch):
+    from agents.collections import semantic
+
+    state = api_post(voice_api, "start").json()
+    speech_calls = len(session.speech.calls)
+
+    def unavailable(*args, **kwargs):
+        raise AssertionError("Hangup must not call a model")
+
+    monkeypatch.setattr(semantic, "understand_turn", unavailable)
+    response = api_post(voice_api, "end", state=state)
+    assert response.status_code == 200 and response.json()["finished"]
+    assert not response.json()["audio_url"]
+    assert len(session.speech.calls) == speech_calls
+
+
+@pytest.mark.parametrize("suffix", [".jinja", ".jinja2"])
+def test_registry_reloads_cached_jinja_templates_between_calls(tmp_path, monkeypatch, suffix):
+    registry, module, _, _ = registry_fixture(tmp_path, monkeypatch)
+    template = module.with_suffix(suffix)
+    template.write_text("first prompt")
+    module.write_text(f"""from pathlib import Path
+from jinja2 import Template
+from langgraph.graph import StateGraph, START, END
+prompt = Template(Path(__file__).with_suffix({suffix!r}).read_text())
+builder = StateGraph(dict)
+builder.add_node("answer", lambda state: {{"prompt": prompt.render()}})
+builder.add_edge(START, "answer")
+builder.add_edge("answer", END)
+agent = builder.compile()
+""")
+    graph, _, version = registry.acquire()
+    assert graph.invoke({})["prompt"] == "first prompt"
+    template.write_text("new prompt")
+    assert registry.catalog()["pending_update"]
+    assert graph.invoke({})["prompt"] == "first prompt"
+    registry.release()
+    current, _, new_version = registry.acquire()
+    assert current.invoke({})["prompt"] == "new prompt" and new_version != version
+    registry.release()
+    template.write_text("{% invalid %}")
+    catalog = registry.catalog()
+    assert catalog["error"] and catalog["version"] == new_version
+    retained, _, _ = registry.acquire()
+    assert retained.invoke({})["prompt"] == "new prompt"
+    registry.release()
+    template.write_text("new prompt")
+    assert not registry.catalog()["error"]
+
+
+def test_registered_repository_graph_uses_one_semantic_pass_per_voice_turn(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = """
+import socket
+import sys
+from datetime import datetime
+from pathlib import Path
+
+def no_network(*args, **kwargs):
+    raise AssertionError("Offline registry integration must not call providers")
+socket.socket.connect = no_network
+from agents.collections.memory import SQLiteRepository
+from agents.collections.runtime import AppContext
+from collections_lab.channels.voice_session import GraphRegistry, VoiceSession
+
+class Speech:
+    def synthesize(self, text):
+        return b"ID3-offline"
+
+root = Path.cwd()
+data = Path(sys.argv[1])
+registry = GraphRegistry(root)
+context = AppContext(SQLiteRepository(data / "conversation.db"), datetime.fromisoformat("2026-10-19T09:00:00-05:00"))
+call = VoiceSession(context, Speech(), data / "audio", graph_registry=registry)
+from agents.collections import semantic
+original = semantic.understand_turn
+calls = []
+def understand(*args, **kwargs):
+    calls.append((args[0], kwargs["stage"]))
+    return original(*args, **kwargs)
+semantic.understand_turn = understand
+stages = []
+for text in ["Hola", "123456789", "1111", "quiero 3 cuotas desde 2026-10-20"]:
+    stages.append(call.send(text)["stage"])
+    nodes = [event["name"] for event in call.trace.snapshot()["events"]]
+    assert nodes.count("understand_message") == 1
+    assert nodes.count("route_chat_message") == 1
+assert stages == ["awaiting_customer", "awaiting_identity", "ready", "awaiting_confirmation"]
+assert len(calls) == 4
+call.retry_audio()
+assert len(calls) == 4
+call.end_call()
+assert len(calls) == 4 and registry._leases == 0
+assert not call.context.repository.agreements()
+print("registered graph + semantic turns + playback retry + hangup: OK")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "hangup: OK" in result.stdout

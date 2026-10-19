@@ -15,7 +15,6 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 
 from agents.collections.agent import build_graph
-from agents.collections.conversation import requests_end
 from collections_lab.channels.elevenlabs import SpeechError
 
 
@@ -115,7 +114,13 @@ class GraphRegistry:
 
     def _fingerprint(self):
         paths = [self.root / "langgraph.json"]
-        paths.extend(sorted((self.root / "src").rglob("*.py")))
+        paths.extend(
+            sorted(
+                path
+                for path in (self.root / "src").rglob("*")
+                if path.is_file() and path.suffix in {".py", ".jinja", ".jinja2"}
+            )
+        )
         digest = hashlib.sha256()
         for path in paths:
             digest.update(str(path.relative_to(self.root)).encode())
@@ -374,13 +379,9 @@ class VoiceSession:
         self.graph_registry = graph_registry
         self._released = False
         self.failed = False
-        self.requests_end = requests_end
         if graph_registry:
             self.graph, graph_id, version = graph_registry.acquire()
             try:
-                self.requests_end = importlib.import_module(
-                    "agents.collections.conversation"
-                ).requests_end
                 runtime = importlib.import_module("agents.collections.runtime")
                 memory = importlib.import_module("agents.collections.memory")
                 self.context = runtime.AppContext(
@@ -446,17 +447,23 @@ class VoiceSession:
             self._released = True
             self.graph_registry.release()
 
-    def check_turn(self, text=""):
+    def end_call(self):
+        """Close the local transport without interpreting synthetic customer speech."""
+        with self._lock:
+            if not self.reply or not self.reply["finished"]:
+                self.reply = {"finished": True, "stage": "closed", "text": "Llamada finalizada."}
+            self.audio = self.played_audio = None
+            self.warning = ""
+            self.release_graph()
+            return self.reply
+
+    def check_turn(self):
         if self.failed:
             raise VoiceInputError("El turno falló. Finaliza esta llamada antes de continuar.")
         if self.reply and self.reply["finished"]:
             raise VoiceInputError("Esta sesión terminó. Inicia una nueva conversación.")
         pending = self.reply and self.reply["stage"] == "awaiting_confirmation"
-        if (
-            pending
-            and not self.requests_end(text)
-            and (not self.audio or self.played_audio != self.audio)
-        ):
+        if pending and (not self.audio or self.played_audio != self.audio):
             raise VoiceInputError(
                 "Espera a que termine la oferta antes de responder. "
                 "Si no suena, pulsa Escuchar mensaje; si falló, pulsa Reintentar audio."
@@ -473,7 +480,7 @@ class VoiceSession:
             text = text.strip()
             if not text or len(text) > 4000:
                 raise VoiceInputError("Escribe o graba un mensaje de entre 1 y 4000 caracteres.")
-            self.check_turn(text)
+            self.check_turn()
             if new_turn:
                 self.trace.begin()
             started = perf_counter()

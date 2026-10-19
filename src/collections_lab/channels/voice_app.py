@@ -303,16 +303,8 @@ def create_app(
                             call.acknowledge_playback(audio_id)
                         elif action == "retry":
                             call.retry_audio()
-                        elif action == "end" and (not call.reply or not call.reply["finished"]):
-                            if call.failed or call.reply is None:
-                                call.reply = {
-                                    "finished": True,
-                                    "stage": "closed",
-                                    "text": "Llamada finalizada.",
-                                }
-                                call.audio = None
-                            else:
-                                call.send("terminar", speak=False)
+                        elif action == "end":
+                            call.end_call()
                     if (
                         entry.call
                         and entry.call.reply
