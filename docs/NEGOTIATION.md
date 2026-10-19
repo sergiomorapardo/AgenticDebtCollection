@@ -31,6 +31,8 @@ for payment. Studio exposes `understand_message` before identity and business ro
 | Natural Spanish input | Backend behavior |
 | --- | --- |
 | `¿Qué opciones tengo?` | List eligible plans without creating an agreement |
+| `Bueno` → `sí, esa` after several options | Clarify which option; keep the question pending instead of repeating the menu |
+| `La de tres cuotas, empezando mañana` | Prepare a proposal; selecting a menu option is not accepting an agreement |
 | `Solo puedo destinar 250 mil al mes` → `mañana` | Carry capacity forward; present 3 × COP 200,000 with exact dates |
 | `De acuerdo, acepto las condiciones que acabas de presentar` | Confirm only the current offer, after revalidation |
 | `Acepto si me descuentan` | Treat as conditional; never sign the preceding offer |

@@ -100,7 +100,7 @@ def prepare_offer(state, ctx, *, negotiation: bool) -> dict:
     schedule = "; ".join(
         f"{item.amount_cop:,} COP el {item.due_date.isoformat()}" for item in offer.installments
     )
-    response = f"Propuesta: {schedule}. Total: {account.balance_cop:,} COP, sin descuentos ni cargos adicionales. ¿Estás de acuerdo con estos importes y fechas, o necesitas cambiar algo?"
+    response = f"Propuesta: {schedule}. Total: {account.balance_cop:,} COP, sin descuentos ni cargos adicionales. ¿Confirmas este importe y estas fechas? Responde confirmo o propone cambios."
     return {
         "session": session,
         "draft_offer": offer.model_dump(mode="json"),
