@@ -84,7 +84,7 @@ def terminal_response(session, text):
             return "Entendido. Mantengo cerrada esta conversación; no retomaré la negociación."
         return (
             "Lamento la atención anterior. Puedo ayudarte a revisar las opciones de pago. "
-            "Si quieres seguir, dime continuemos."
+            "¿Quieres que sigamos revisando las opciones de pago?"
         )
     prefix = "Lamento la mala experiencia. " if social_intent(text) == "complaint" else ""
     if not session.get("identity_verified"):

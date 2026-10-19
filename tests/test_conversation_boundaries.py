@@ -167,7 +167,7 @@ def test_legacy_wrong_close_requires_explicit_resume_and_preserves_history(conve
     send, ctx, session_id = conversation
     seed_legacy_close(ctx, session_id)
     assert "opciones de pago" in send("¿qué pasó?")["reply"]["text"]
-    assert "continuemos" in send("que mal servicio!!!")["reply"]["text"]
+    assert "¿Quieres que sigamos" in send("que mal servicio!!!")["reply"]["text"]
     assert ctx.repository.get_session(session_id)["stage"] == "closed"
     result = send("continuemos", "resume")
     assert result["reply"]["stage"] == "ready"

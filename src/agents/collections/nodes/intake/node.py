@@ -4,7 +4,6 @@ from langgraph.runtime import Runtime
 
 from agents.collections.contact import check_contact
 from agents.collections.conversation import (
-    normalize_text,
     recoverable_misclosure,
     requests_end,
     terminal_response,
@@ -80,25 +79,35 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     if session["account_id"] != account_id:
         raise ValueError("Una sesión no puede cambiar de cuenta.")
     base["session"] = session
-    if recoverable_misclosure(session) and normalize_text(text) in {
-        "continuemos",
-        "retomemos",
-        "quiero continuar",
-        "quiero retomar",
-    }:
-        session.update(
-            stage="ready",
-            pending_offer_id=None,
-            draft_terms={},
-            clarifications=0,
-            close_reason=None,
-            recovered_from="legacy_off_topic_closure",
-        )
-        session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
-        return {
-            **base,
-            "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
-        }
+    if recoverable_misclosure(session):
+        from agents.collections.continuation import interpret_continuation
+
+        intent, status = interpret_continuation(state, session, ctx)
+        if status == "model_error":
+            return {
+                **base,
+                "response_text": "No pude entender tu respuesta en este momento. ¿Quieres que sigamos revisando las opciones de pago?",
+            }
+        if intent in {"stop", "decline"}:
+            session["close_reason"] = "customer_request"
+            return {
+                **base,
+                "response_text": "Entendido. Mantengo cerrada esta conversación; no retomaré la negociación.",
+            }
+        if intent == "resume":
+            session.update(
+                stage="ready",
+                pending_offer_id=None,
+                draft_terms={},
+                clarifications=0,
+                close_reason=None,
+                recovered_from="legacy_off_topic_closure",
+            )
+            session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+            return {
+                **base,
+                "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
+            }
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
