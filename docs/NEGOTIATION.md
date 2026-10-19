@@ -76,8 +76,21 @@ classification JSON to the customer.
 - At most three objection turns or three proposals precede simulated review.
 - No payment is recorded merely because the customer promises or reports one.
 - Paused onboarding does not keep requesting identity; ordinary chat does not consume code attempts.
-- Legitimate closures remain closed. Only a verified, narrowly recognized historical false closure
-  can resume after an LLM-understood continuation request; recovery itself creates no agreement.
+- Ending collection does not block account questions or disputes in the same verified thread.
+- After refusal or a customer-requested close, a newly understood request to continue or discuss
+  payment options can resume negotiation. Old offers are invalidated; history and limits remain.
+- Complaints, greetings and ambiguous assent never reopen collection. Disputes and reported
+  payments go to simulated review without an agreement or a verified payment.
+- Agreement and handoff outcomes cannot restart negotiation. Identity/contact failures remain
+  blocked. The narrowly recognized historical false-closure recovery is also retained.
 
 Use separate databases for independent scenarios. See [validation](VALIDATION.md) for tested
 boundaries and [streaming](STREAMING.md) for latency and failure behavior.
+
+## Live refactor evidence
+
+The seven-turn Haiku graph test covered identity, options, COP 250,000 monthly capacity,
+a relative date, natural acceptance and exactly one agreement of 3 × COP 200,000.
+Each fresh turn made one semantic call; replay made none. Complaint/off-topic streaming
+checks delivered first fragments in 1.5–1.9 seconds. These are graph/API measurements,
+not a latency guarantee or a new manual browser validation.
