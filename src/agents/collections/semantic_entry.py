@@ -109,6 +109,8 @@ def understand_message(state, runtime):
         history = session.get("history", []) if session else []
         context = _session_context(repo, session, session_id, verified=verified)
     context["latest_assistant_prompt"] = _latest_assistant(history)
+    # Snapshot trusted scalar confirmation fields before the model can yield to other turns.
+    binding_state = {**state, "session": dict(session) if session is not None else None}
     result = semantic.understand_turn(
         text, ctx=ctx, today=ctx.today, stage=stage, history=history, context=context
     )
@@ -116,4 +118,4 @@ def understand_message(state, runtime):
         raise ValueError(
             "Could not interpret this message. Retry before starting a collection session."
         )
-    return {"semantic_result": bind_understanding(state, result)}
+    return {"semantic_result": bind_understanding(binding_state, result)}
