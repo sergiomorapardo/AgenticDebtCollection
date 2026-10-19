@@ -28,9 +28,13 @@ def redact_dialogue(text, *, max_length=600):
     return redacted if max_length is None else redacted[:max_length]
 
 
-def contextual_reply(ctx, text, history, reference, paused, intent=None):
+def contextual_reply(
+    ctx, text, history, reference, paused, intent=None, *, stage=None, next_step=None
+):
+    system = render_prompt("onboarding_draft", stage=stage)
     payload = {
-        "current_message": redact_dialogue(text),
+        "current_message": redact_dialogue(text, max_length=None),
+        "next_step": next_step if not paused else None,
         "recent_dialogue": history[-4:],
         "reference": redact_dialogue(reference),
         "paused": paused,
@@ -39,7 +43,7 @@ def contextual_reply(ctx, text, history, reference, paused, intent=None):
     }
     for attempt in range(1, 3):
         try:
-            candidate = _request(ctx, ReplyDraft, DRAFT_PROMPT, payload).text
+            candidate = _request(ctx, ReplyDraft, system, payload).text
             prohibited = re.search(
                 r"\d|https?://|www\.|\b(embarg\w*|demanda\w*|carcel|cárcel|datacredito|datacrédito)\b",
                 candidate,
