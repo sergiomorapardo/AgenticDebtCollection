@@ -243,3 +243,36 @@ real transfer. The legacy false-closure signature remains unchanged for historic
 
 | UX-05 | `987654321` → `1111` → `ya te lo pase, era 987654321` | Acknowledge missing account; explain premature code; accept corrected fixture ID without consuming verification attempts | `test_screenshot_unknown_id_then_code_then_correction`; Agent Server CI smoke |
 | UX-06 | Multiple numbers or unknown ID of another length | Ask for one ID or report no account; never guess, truncate, bind identity, or call onboarding model | Studio identification regression tests |
+
+
+## Contextual continuation after a historical false closure
+
+```mermaid
+flowchart LR
+    U[Customer reply] --> G{Backend: verified and recoverable?}
+    G -->|No| T[Keep legitimate terminal outcome]
+    G -->|Yes| I[Haiku interprets redacted message and recent dialogue]
+    I -->|Clear continuation| R[Resume conversation; clear pending terms]
+    I -->|Stop or decline| C[Keep closed; disable recovery]
+    I -->|Ambiguous or provider error| Q[Ask whether to continue; keep closed]
+    R --> N[No agreement or payment created]
+```
+
+| Input | Expected outcome |
+| --- | --- |
+| `sigue`, `dale`, `sí, adelante` | Continue the conversation; no magic word required |
+| `bueno, cuéntame qué opciones tengo entonces` | Interpret contextual intent, without a production phrase allowlist |
+| `ahora no`, request to stop | Respect refusal; subsequent continuation cannot reopen this closure |
+| `sigue con el programa en Python`, conditional or hypothetical consent | Keep closed and clarify |
+| Valid agreement, human-review handoff, or legitimate closure | Skip the continuation model; preserve outcome |
+| Provider timeout or malformed result | Keep closed; ask again without assuming consent |
+
+Evidence: `test_continuation_regression.py`, the real Agent Server CI smoke, and a manual
+Haiku run with synthetic dialogue. Mock mode is a limited offline fixture. The real path
+uses the configured Haiku model with at most six recent messages (or three stored turns),
+600 characters per history excerpt, masking numbers, emails and links. The current
+message is preserved in full (up to the existing 4,000-character input limit), including
+any final correction or negation. This masking is not full
+anonymization. Internal classification events stay out of the customer token stream.
+This change targets historical false-closure continuation; financial confirmation rules
+remain in the backend.

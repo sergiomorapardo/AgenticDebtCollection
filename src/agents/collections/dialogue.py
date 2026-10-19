@@ -1,12 +1,117 @@
 """Choose the next conversational step using persisted, bounded negotiation memory."""
 
-from agents.collections.conversation import explicit_refusal
+from agents.collections.policy import build_offer, load_policy
+from agents.collections.runtime import resolve_context
+from agents.collections.semantic_state import current_understanding
 
 
 def plan_dialogue(state, runtime):
     session = dict(state["session"])
     intent = state.get("interpretation", {}).get("intent")
     dialogue = dict(session.get("dialogue", {}))
+    understanding = current_understanding(state)
+    if understanding is None or understanding.status == "model_error":
+        return {
+            "session": session,
+            "intent_route": "response",
+            "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
+        }
+    if intent in {"negotiate", "counteroffer"} and session.get("identity_verified"):
+        meaning = understanding.turn
+        ctx = resolve_context(runtime)
+        policy = load_policy()
+        account = ctx.repository.get_account(session["account_id"])
+        too_many = (
+            meaning.installments is not None and meaning.installments > policy.max_installments
+        )
+        too_little = (
+            meaning.amount_cop is not None
+            and (meaning.amount_is_capacity or meaning.frequency == "monthly")
+            and meaning.amount_cop * policy.max_installments < account.balance_cop
+        )
+        if too_many or too_little:
+            # Interpretation preserves requested values. Only backend policy decides
+            # feasibility; never silently clamp the request into an accepted offer.
+            # New counterterms invalidate the old offer to prevent stale acceptance.
+            needs_review = too_many or meaning.amount_is_capacity
+            session.update(
+                stage="handoff" if needs_review else "ready",
+                pending_offer_id=None,
+                draft_terms={},
+            )
+            if needs_review:
+                session["handoff_reason"] = "outside_policy"
+            dialogue["awaiting"] = None if needs_review else "option"
+            session["dialogue"] = dialogue
+            minimum = (account.balance_cop + policy.max_installments - 1) // policy.max_installments
+            requested = (
+                f"No puedo ofrecer {meaning.installments:,} cuotas. "
+                if too_many
+                else f"No puedo ofrecer cuotas de {meaning.amount_cop:,} COP para cubrir este saldo. "
+            )
+            return {
+                "session": session,
+                "intent_route": "response",
+                "response_text": requested
+                + f"El máximo permitido es de {policy.max_installments} cuotas mensuales; con el saldo de {account.balance_cop:,} COP, ese plan tendría cuotas de hasta {minimum:,} COP. "
+                + (
+                    "Dejo registrada una solicitud de revisión, sin aprobar esas condiciones ni registrar un acuerdo."
+                    if needs_review
+                    else "Si no se ajusta a tu capacidad, puedes solicitar una revisión. No registré ningún acuerdo."
+                ),
+            }
+    if intent in {"options", "continue"}:
+        if not session.get("identity_verified"):
+            return {
+                "session": session,
+                "intent_route": "response",
+                "response_text": "Antes de consultar opciones de la cuenta necesito verificar tu identidad.",
+            }
+        ctx = resolve_context(runtime)
+        account = ctx.repository.get_account(session["account_id"])
+        policy = load_policy()
+        choices = []
+        for count in range(1, policy.max_installments + 1):
+            try:
+                option = build_offer(
+                    account,
+                    policy,
+                    today=ctx.today,
+                    first_payment_date=ctx.today,
+                    installments=count,
+                )
+            except ValueError:
+                continue
+            capacity = dialogue.get("monthly_capacity_cop")
+            if capacity is not None and any(
+                item.amount_cop > capacity for item in option.installments
+            ):
+                continue
+            amounts = ", ".join(f"{item.amount_cop:,} COP" for item in option.installments)
+            label = "un pago" if count == 1 else f"{count} cuotas mensuales"
+            choices.append(f"{label}: {amounts}")
+        session.update(pending_offer_id=None, draft_terms={}, stage="ready")
+        dialogue["awaiting"] = "option"
+        session["dialogue"] = dialogue
+        if not choices:
+            session.update(stage="handoff", handoff_reason="no_viable_plan")
+            dialogue["awaiting"] = None
+            text = "No encontré un plan disponible que se ajuste a tu capacidad. Dejo una solicitud de revisión, sin registrar un acuerdo."
+        else:
+            text = (
+                "Puedes pagar en "
+                + "; ".join(choices)
+                + f". El primer pago debe ser dentro de {policy.first_payment_within_days} días. "
+                "Estos importes son orientativos, no hay una oferta para aceptar: elige una opción y una fecha para revisar "
+                "el calendario completo antes de confirmar."
+            )
+        return {"session": session, "intent_route": "response", "response_text": text}
+    if intent in {"scope", "history", "greeting"}:
+        return {
+            "session": session,
+            "intent_route": "response",
+            "response_text": "Puedo ayudarte a revisar tu cuenta, las opciones de pago o solicitar atención de un asesor. ¿Qué te gustaría revisar?",
+        }
     if intent in {"off_topic", "complaint", "clarify_process"}:
         responses = {
             "off_topic": "Puedo ayudarte con tu cuenta y las opciones de pago, pero no con programación u otros temas. La sesión sigue abierta. ¿Quieres retomar lo que te preocupa de la deuda?",
@@ -14,12 +119,7 @@ def plan_dialogue(state, runtime):
             "clarify_process": "La sesión sigue abierta. Podemos aclarar una duda sobre la deuda, revisar opciones de pago, dejar una solicitud de atención de un asesor o terminar si lo pides. ¿Qué necesitas aclarar?",
         }
         return {"session": session, "intent_route": "response", "response_text": responses[intent]}
-    if dialogue.get("awaiting") == "capacity" and state["text"].strip().lower() in {
-        "nada",
-        "cero",
-        "0",
-        "no puedo destinar nada",
-    }:
+    if intent == "no_capacity":
         session.update(
             stage="handoff", pending_offer_id=None, draft_terms={}, handoff_reason="no_capacity"
         )
@@ -34,7 +134,7 @@ def plan_dialogue(state, runtime):
         return {}
     dialogue["last_intent"] = intent
     if intent == "refuse":
-        dialogue["refusals"] = dialogue.get("refusals", 0) + int(explicit_refusal(state["text"]))
+        dialogue["refusals"] = dialogue.get("refusals", 0) + 1
         session.update(pending_offer_id=None, draft_terms={}, stage="ready")
         if dialogue["refusals"] >= 2:
             session["stage"] = "closed"

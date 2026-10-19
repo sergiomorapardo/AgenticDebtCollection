@@ -4,14 +4,13 @@ from langgraph.runtime import Runtime
 
 from agents.collections.contact import check_contact
 from agents.collections.conversation import (
-    normalize_text,
     recoverable_misclosure,
-    requests_end,
     terminal_response,
 )
 from agents.collections.memory import event_hash
 from agents.collections.policy import load_policy
 from agents.collections.runtime import AppContext, resolve_context
+from agents.collections.semantic_state import current_understanding
 from agents.collections.state import State
 
 from .tools import verify_demo_code
@@ -41,7 +40,11 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     }
     if replay is not None:
         return {**base, "replay": True, "reply": replay}
+    understanding = current_understanding(state)
     session = repo.get_session(session_id)
+    valid_meaning = understanding is not None and understanding.status != "model_error"
+    if session is None and not valid_meaning and not (understanding is None and not text):
+        raise ValueError("A new message requires a valid event-bound semantic interpretation.")
     if session is None:
         repo.get_account(account_id)
         session = {
@@ -71,6 +74,8 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 "session": session,
                 "response_text": "No puedo iniciar esta gestión en este momento. El contacto no está autorizado para este horario o frecuencia.",
             }
+        if understanding is not None and understanding.turn.intent in {"end", "decline"}:
+            return {**base, "session": session, "intake_route": "close"}
         session["contact_started_at"] = ctx.now.isoformat()
         return {
             **base,
@@ -80,31 +85,74 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     if session["account_id"] != account_id:
         raise ValueError("Una sesión no puede cambiar de cuenta.")
     base["session"] = session
-    if recoverable_misclosure(session) and normalize_text(text) in {
-        "continuemos",
-        "retomemos",
-        "quiero continuar",
-        "quiero retomar",
-    }:
-        session.update(
-            stage="ready",
-            pending_offer_id=None,
-            draft_terms={},
-            clarifications=0,
-            close_reason=None,
-            recovered_from="legacy_off_topic_closure",
-        )
-        session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+    if not valid_meaning:
         return {
             **base,
-            "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
+            "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
         }
+    if recoverable_misclosure(session):
+        from agents.collections.continuation import interpret_continuation
+
+        intent, status = interpret_continuation(state, session, ctx)
+        if status == "model_error":
+            return {
+                **base,
+                "response_text": "No pude entender tu respuesta en este momento. ¿Quieres que sigamos revisando las opciones de pago?",
+            }
+        if intent in {"stop", "decline"}:
+            session["close_reason"] = "customer_request"
+            return {
+                **base,
+                "response_text": "Entendido. Mantengo cerrada esta conversación; no retomaré la negociación.",
+            }
+        if intent == "resume":
+            session.update(
+                stage="ready",
+                pending_offer_id=None,
+                draft_terms={},
+                clarifications=0,
+                close_reason=None,
+                recovered_from="legacy_off_topic_closure",
+            )
+            session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+            return {**base, "intake_route": "interpret"}
+    if session["stage"] == "closed" and session.get("identity_verified"):
+        intent = understanding.turn.intent
+        if intent in {"dispute", "reported_payment", "request_human"}:
+            # Stopping collection does not prevent the customer from raising a review.
+            # Preserve any recorded agreement and never interpret this as payment consent.
+            session.update(pending_offer_id=None, draft_terms={})
+            return {**base, "intake_route": "interpret"}
+        if (
+            session.get("close_reason") in {"customer_request", "repeated_refusal"}
+            and not session.get("agreement_id")
+            and intent in {"continue", "options", "promise", "negotiate", "counteroffer"}
+        ):
+            # Only the customer's newly understood request resumes collection. A greeting,
+            # complaint, ambiguous assent or acceptance of an obsolete offer cannot do so.
+            if session["turns"] >= 20:
+                session.update(stage="handoff", pending_offer_id=None, draft_terms={})
+                return {
+                    **base,
+                    "response_text": "Para seguir revisando tu caso, dejo registrada una solicitud de revisión. No registré un nuevo acuerdo.",
+                }
+            previous_reason = session["close_reason"]
+            session.update(
+                stage="ready",
+                pending_offer_id=None,
+                draft_terms={},
+                clarifications=0,
+                close_reason=None,
+                resumed_from=previous_reason,
+            )
+            session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
+            return {**base, "intake_route": "interpret"}
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
-            "response_text": terminal_response(session, text),
+            "response_text": terminal_response(session, text, intent=understanding.turn.intent),
         }
-    if requests_end(text):
+    if understanding.turn.intent in {"end", "decline"}:
         return {**base, "intake_route": "close"}
     if session["turns"] >= 20:
         session["stage"] = "handoff"
@@ -113,7 +161,14 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "response_text": "No hemos podido resolver la gestión en esta conversación. Dejo registrada una solicitud de revisión.",
         }
     if not session["identity_verified"]:
-        if verify_demo_code(account_id, text):
+        candidate = understanding.verification_candidate
+        if understanding.turn.intent != "verification_code" or candidate is None:
+            return {
+                **base,
+                "response_text": "Antes de consultar la cuenta necesito verificar tu identidad. Comparte el código de verificación o dime si prefieres terminar.",
+            }
+        verification_text = f"verificar {candidate}"
+        if verify_demo_code(account_id, verification_text):
             session["identity_verified"] = True
             session["stage"] = "ready"
             account = repo.get_account(account_id)
@@ -131,5 +186,26 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         return {
             **base,
             "response_text": "El código de verificación no coincide. Revisa el código e inténtalo de nuevo.",
+        }
+    meaning = understanding.turn
+    if (
+        session["stage"] == "ready"
+        and session.get("dialogue", {}).get("awaiting") == "option"
+        and not session.get("pending_offer_id")
+        and meaning.intent in {"continue", "unclear"}
+        and meaning.acceptance == "none"
+        and meaning.frequency == "unspecified"
+        and not meaning.amount_is_capacity
+        and all(
+            value is None
+            for value in (meaning.amount_cop, meaning.payment_date, meaning.installments)
+        )
+    ):
+        # The customer acknowledged a menu, but has not selected a plan. Preserve the
+        # pending question instead of treating acknowledgement as a new menu request.
+        return {
+            **base,
+            "interpretation": meaning.model_dump(mode="json"),
+            "response_text": "¿Cuál de las opciones que te mostré prefieres? Si ninguna se ajusta, cuéntame cuánto podrías pagar al mes.",
         }
     return {**base, "intake_route": "interpret"}

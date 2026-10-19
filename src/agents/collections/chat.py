@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import re
 from typing import Annotated
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage
@@ -13,10 +12,11 @@ from typing_extensions import TypedDict
 
 from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
-from agents.collections.conversation import normalize_text, requests_end
+from agents.collections.memory import event_hash
 from agents.collections.nodes.intake.tools import verify_demo_code
 from agents.collections.onboarding import onboarding_reply
 from agents.collections.runtime import resolve_context
+from agents.collections.semantic_state import current_understanding
 from agents.collections.state import State
 
 
@@ -62,13 +62,18 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
     digest = hashlib.sha256(content.encode()).hexdigest()
     event = hashlib.sha256(json.dumps([thread, message.id]).encode()).hexdigest()
     cached = memory.replay(thread, event, digest)
+    binding = memory.binding(thread)
+    if cached is None and binding["verified"] and binding["session_id"]:
+        # A business receipt may already exist if final message delivery failed.
+        cached = memory.repository.get_event(
+            binding["session_id"], event, event_hash(binding["account_id"], content.strip())
+        )
     if not isinstance(messages[-1], HumanMessage) and not (
         cached
         and isinstance(messages[-1], AIMessage)
         and messages[-1].id == (cached.get("message_id") or "reply:" + event)
     ):
         raise ValueError("Send a human message to continue the conversation.")
-    binding = memory.binding(thread)
     base = {
         "chat_thread": thread,
         "chat_event": event,
@@ -79,12 +84,21 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
         "text": content.strip(),
         "chat_reply": cached,
         "history_summary": "",
+        "semantic_result": None,
+        "interpretation": {},
     }
     if cached:
         return {**base, "chat_route": "assistant_message"}
+    return {**base, "chat_route": "understand_message"}
+
+
+def route_chat_message(state: ChatState, runtime: Runtime):
+    """Apply backend authority after the current message has been understood."""
+    memory = ChatMemory(resolve_context(runtime).repository)
+    binding = memory.binding(state["chat_thread"])
+    understanding = current_understanding(state)
     if binding["closed"]:
         return {
-            **base,
             "chat_route": "assistant_message",
             "chat_reply": reply(
                 "Esta conversación ya terminó. No consultaré tu cuenta ni registraré nuevos compromisos aquí.",
@@ -92,63 +106,59 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
                 True,
             ),
         }
-    if not binding["verified"] and requests_end(base["text"]):
+    if understanding is None or understanding.status == "model_error":
+        stage = "awaiting_identity" if binding["account_id"] else "awaiting_customer"
+        if binding["verified"] and binding["session_id"]:
+            session = memory.repository.get_session(binding["session_id"])
+            stage = session["stage"] if session else "ready"
+        return {
+            "chat_route": "assistant_message",
+            "chat_reply": {
+                **reply(
+                    "No pude interpretar tu mensaje en este momento. Puedes intentarlo de nuevo.",
+                    stage,
+                    stage in {"closed", "handoff", "agreed"},
+                ),
+                "interpretation_status": "model_error",
+            },
+        }
+    if (
+        not binding["verified"] or not binding["session_id"]
+    ) and understanding.turn.intent == "end":
         binding["closed"] = True
         response = memory.save_transition(
-            base,
+            state,
             binding,
             reply(
                 "Entendido, finalizo la conversación sin consultar tu historial.", "closed", True
             ),
         )
-        return {**base, "chat_route": "assistant_message", "chat_reply": response}
+        return {"chat_route": "assistant_message", "chat_reply": response}
     if not binding["account_id"]:
         route = "identify_customer"
     elif not binding["verified"]:
         route = "verify_identity"
-    elif not binding["session_id"] or re.search(
-        r"\b(historial|resumen|acordamos|acordado)\b", base["text"], re.IGNORECASE
-    ):
+    elif not binding["session_id"] or understanding.turn.intent == "history":
         route = "recover_history"
     else:
         route = "intake"
-    return {**base, "chat_route": route}
+    return {"chat_route": route}
 
 
 def identify_customer(state: ChatState, runtime: Runtime):
     memory = ChatMemory(resolve_context(runtime).repository)
     customers = json.loads((data_directory() / "fixtures/customers.json").read_text())
-    normalized = normalize_text(state["text"])
-    # Intercept apparent identity/code submissions, not incidental amounts or dates.
-    numeric_submission = re.fullmatch(r"[0-9]+(?:\s*(?:[,;]|o|y)\s*[0-9]+)*", normalized)
-    identity_submission = re.search(
-        r"\b(cedula|identificacion|documento|codigo|verificar)\b|"
-        r"\bmi numero\b|\bya te (?:lo )?(?:pase|di|envie|comparti)\b|"
-        r"^(?:es|era) [0-9]+$",
-        normalized,
-    )
-    candidates = (
-        re.findall(r"(?<!\w)[0-9]+(?!\w)", state["text"])
-        if numeric_submission or identity_submission
-        else []
-    )
-    account = customers.get(candidates[0]) if len(candidates) == 1 else None
+    understanding = current_understanding(state)
+    candidate = understanding.identity_candidate if understanding else None
+    account = customers.get(candidate) if candidate is not None else None
     if account is None:
-        if candidates:
-            if len(candidates) > 1:
-                text = (
-                    "Veo varios números. ¿Cuál es tu número de identificación? Compárteme solo uno."
-                )
-            elif len(candidates[0]) == 4:
-                text = (
-                    "Aún no he encontrado tu cuenta. Si ese número es el código de verificación, "
-                    "primero necesito tu número de identificación."
-                )
-            else:
-                text = (
-                    "No pude encontrar una cuenta con esa identificación. "
-                    "Revisa el número o dime si prefieres terminar."
-                )
+        if candidate is not None:
+            text = (
+                "Aún no he encontrado tu cuenta. Si ese número es el código de verificación, "
+                "primero necesito tu número de identificación."
+                if len(candidate) == 4
+                else "No pude encontrar una cuenta con esa identificación. Revisa el número o dime si prefieres terminar."
+            )
             return {"chat_reply": reply(text)}
         return respond_onboarding(state, runtime)
     with memory.repository.connection():
@@ -168,21 +178,25 @@ def identify_customer(state: ChatState, runtime: Runtime):
 def respond_onboarding(state: ChatState, runtime: Runtime):
     ctx = resolve_context(runtime)
     memory = ChatMemory(ctx.repository)
-    binding, response = onboarding_reply(state["text"], memory.binding(state["chat_thread"]), ctx)
+    binding, response = onboarding_reply(
+        state["text"],
+        memory.binding(state["chat_thread"]),
+        ctx,
+        understanding=current_understanding(state),
+    )
     response = memory.save_transition(state, binding, response)
     return {"chat_route": "assistant_message", "chat_reply": response}
 
 
 def verify_identity(state: ChatState, runtime: Runtime):
-    # Only an actual verification submission consumes a verification attempt.
-    if not re.fullmatch(r"verificar(?:\s+\d+)?|\d{4}", state["text"], re.IGNORECASE | re.DOTALL):
+    understanding = current_understanding(state)
+    candidate = understanding.verification_candidate if understanding else None
+    if candidate is None:
         return respond_onboarding(state, runtime)
     memory = ChatMemory(resolve_context(runtime).repository)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
-        code_input = state["text"]
-        if re.fullmatch(r"\d{4}", code_input):
-            code_input = "verificar " + code_input
+        code_input = "verificar " + candidate
         if verify_demo_code(binding["account_id"], code_input):
             binding["verified"] = True
             memory.save_binding(state["chat_thread"], binding)
