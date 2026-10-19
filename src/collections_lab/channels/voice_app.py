@@ -319,6 +319,7 @@ def create_app(
                         and entry.call.reply["finished"]
                         and entry.ended is None
                     ):
+                        entry.call.release_graph()
                         entry.ended = monotonic()
                     result = snapshot(entry)
                 except (VoiceInputError, SpeechError) as error:
@@ -346,7 +347,7 @@ def create_app(
                         entry.published.update(
                             session_id=entry.call.thread_id,
                             history=list(entry.call.history),
-                            finished=False,
+                            finished=bool(entry.call.reply and entry.call.reply.get("finished")),
                             elapsed_seconds=max(0, monotonic() - entry.started),
                         )
                         entry.published_at = monotonic()

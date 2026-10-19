@@ -339,6 +339,7 @@ class ExecutionTrace:
 
     def fail_running(self):
         with self._lock:
+            self.graph_complete = False
             for event in self.events:
                 if event["status"] == "running":
                     self.finish(event["id"], failed=True)
@@ -498,19 +499,19 @@ class VoiceSession:
                         or not isinstance(reply.get("finished"), bool)
                     ):
                         raise TypeError("Graph returned an invalid voice reply")
+                    self.trace.complete()
+                self.reply = reply
+                self.latencies["agent_seconds"] = round(perf_counter() - started, 3)
+                self.history.extend(
+                    [
+                        {"role": "user", "content": text},
+                        {"role": "assistant", "content": self.reply["text"]},
+                    ]
+                )
             except Exception:
                 self.failed = True
                 self.trace.fail_running()
                 raise
-            self.trace.complete()
-            self.reply = reply
-            self.latencies["agent_seconds"] = round(perf_counter() - started, 3)
-            self.history.extend(
-                [
-                    {"role": "user", "content": text},
-                    {"role": "assistant", "content": self.reply["text"]},
-                ]
-            )
             # Persist the turn before synthesis. An audio retry never replays the graph.
             if speak:
                 self.retry_audio()

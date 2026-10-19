@@ -869,3 +869,40 @@ def test_failed_initial_publication_keeps_call_reachable_for_hangup(voice_api, m
         current = voice_api.get("/api/session").json()
         assert current["session_id"] and current["failed"] and not current["busy"]
     assert api_post(voice_api, "end", state=current).json()["finished"]
+
+
+def test_trace_completion_failure_rolls_back_agreement(session, monkeypatch):
+    offer(session)
+    session.acknowledge_playback(session.audio)
+
+    def fail():
+        raise RuntimeError("trace completion failed")
+
+    monkeypatch.setattr(session.trace, "complete", fail)
+    with pytest.raises(RuntimeError, match="trace completion"):
+        session.send("confirmo")
+    assert session.failed and not session.trace.snapshot()["graph_complete"]
+    assert not session.context.repository.agreements()
+    with pytest.raises(ValueError, match="Finaliza"):
+        session.send("confirmo")
+
+
+def test_hangup_remains_finished_during_permanent_snapshot_failure(voice_api, monkeypatch):
+    state = api_post(voice_api, "start").json()
+    released = []
+    release = VoiceSession.release_graph
+
+    def record_release(self):
+        released.append(self.thread_id)
+        release(self)
+
+    def fail(self):
+        raise RuntimeError("persistent snapshot failure")
+
+    monkeypatch.setattr(VoiceSession, "details", fail)
+    monkeypatch.setattr(VoiceSession, "release_graph", record_release)
+    result = api_post(voice_api, "end", state=state)
+    assert result.status_code == 500
+    current = voice_api.get("/api/session").json()
+    assert current["finished"] and not current["busy"] and not current["ready"]
+    assert state["session_id"] in released

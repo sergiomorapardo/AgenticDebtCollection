@@ -150,6 +150,9 @@ Reloading merely because no turn is busy would violate this per-call version gua
 The fingerprint excludes JSON fixtures and policy data; their call-time reads do not trigger a
 pending-source notice. Catalog polls currently hash local source while holding the registry lock.
 Incremental change detection and background catalog preparation are performance follow-ups.
+The voice turn uses a thread-local SQLite transaction. Repository-writing nodes must execute
+serially on the turn thread; parallel graph branches may be visualized but must not access this
+repository until transaction propagation across workers has been designed and tested.
 
 This watches the current checkout, not GitHub: integrating/pulling other PRs remains explicit.
 Once their source is present here, graph changes need no manual diagram updates or server restart.
