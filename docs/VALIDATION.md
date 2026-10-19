@@ -27,12 +27,12 @@ Change its text while keeping the same event ID: expect a conflict.
 
 | Verified locally | Evidence |
 | --- | --- |
-| Policies and interpretation | Offline unit tests for amounts, dates, contact controls, and conservative parsing |
+| Policies and interpretation | Structured semantic contracts, event-bound meaning, fail-closed consumers, financial rules, and explicitly offline mock fixtures |
 | Stateful workflow | Recovery, retries, isolation, concurrent persistence, invalidated offers, and rollback tests |
 | Studio schema | Messages-only input, AI responses, verified identity, cross-thread recall, and customer isolation tests |
 | Studio development server API | CI starts the real server, checks health/registration/schema, runs human-message conversations with thread/checkpoint metadata, verifies replay, returning-customer recall, and isolation between two customers |
 | Studio browser Chat | Chrome: natural messages through identity, negotiation, and confirmation; a new thread recovered the same agreement after verification; Graph mode exposed all identity and memory nodes |
-| Live Haiku dialogue (2026-10-18) | Two synthetic Studio-graph conversations: repeated refusal closes without agreement; hardship → COP 250,000 monthly capacity → tomorrow → confirmation saves 3 × COP 200,000. Both objection questions received validated generated wording. These were graph/API calls, not a new manual browser pass. |
+| Live Haiku refactor (2026-10-18) | Seven-turn graph flow: natural ID/code → options → COP 250,000 monthly capacity → tomorrow → natural acceptance → exactly one agreement of 3 × COP 200,000. One semantic call per fresh turn; replay adds zero calls. Complaint and off-topic streaming tests kept the conversation open, with first fragments in 1.5–1.9 seconds. This is graph/API evidence, not a new manual Studio browser pass or a latency guarantee. |
 | Packaging | Lint, formatting, locked dependencies, wheel, and source distribution |
 
 | Pending | Requires |
