@@ -57,8 +57,6 @@ def prepare_reply(state, runtime):
         and not state.get("commit_requested")
         and not state.get("draft_offer")
         and state.get("interpretation")
-        and state["interpretation"].get("intent")
-        not in {"off_topic", "complaint", "clarify_process"}
         and state["session"].get("identity_verified")
         and state["session"]["stage"] not in {"agreed", "closed", "handoff"}
         and "?" in reference
@@ -74,25 +72,39 @@ def prepare_reply(state, runtime):
     }
 
 
+def _dialogue_payload(state):
+    from agents.collections.onboarding_wording import redact_dialogue
+
+    history = [
+        {"user": redact_dialogue(turn["user"]), "assistant": redact_dialogue(turn["assistant"])}
+        for turn in state["session"].get("history", [])[-4:]
+    ]
+    return {
+        "reference": state["wording_reference"],
+        "current_message": redact_dialogue(state.get("text", ""), max_length=None),
+        "recent_dialogue": history,
+        "intent": state.get("interpretation", {}).get("intent"),
+    }
+
+
 def draft_reply(state, runtime):
     ctx = resolve_context(runtime)
+    system = render_prompt("reply_draft", stage=state["session"]["stage"])
+    payload = _dialogue_payload(state)
     if ctx.stream_responses:
         from agents.collections.streaming import stream_reply
 
-        streamed = stream_reply(ctx, DRAFT_PROMPT, {"reference": state["wording_reference"]})
+        streamed = stream_reply(ctx, system, payload)
         return {
             "streamed_reply": streamed,
             "response_text": streamed["text"],
             "wording_status": streamed["wording_status"],
             "wording_attempts": 1,
         }
-    payload = {
-        "reference": state["wording_reference"],
-        "previous_draft_rejected": state["wording_attempts"] > 0,
-    }
+    payload["previous_draft_rejected"] = state["wording_attempts"] > 0
     result = {"wording_attempts": state["wording_attempts"] + 1}
     try:
-        candidate = _request(ctx, ReplyDraft, DRAFT_PROMPT, payload)
+        candidate = _request(ctx, ReplyDraft, system, payload)
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return {**result, "wording_draft": "", "wording_status": "model_error"}
     return {**result, "wording_draft": candidate.text, "wording_status": "pending"}
@@ -116,7 +128,7 @@ def review_reply(state, runtime):
                 resolve_context(runtime),
                 ReplyReview,
                 REVIEW_PROMPT,
-                {"reference": state["wording_reference"], "candidate": candidate},
+                {**_dialogue_payload(state), "candidate": candidate},
             )
             accepted = all(result.model_dump().values())
         except (APIError, ValueError, TimeoutError, ConnectionError):

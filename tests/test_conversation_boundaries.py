@@ -211,15 +211,21 @@ def test_boundary_replies_preserve_scope_and_simulation_disclosures(conversation
         ),
     )
 
-    def no_rewrite(*args):
-        raise AssertionError("Do not rewrite scope or service-state messages")
+    observed = []
 
-    monkeypatch.setattr(wording, "_request", no_rewrite)
+    def contextual_provider(context, schema, system, payload):
+        observed.append(payload)
+        if schema is wording.ReplyDraft:
+            return schema(text=payload["reference"])
+        return schema(preserves_next_step=True, no_new_claims=True, respectful=True)
+
+    monkeypatch.setattr(wording, "_request", contextual_provider)
     ctx.provider = "anthropic"
     for text in ["ayudame a programar en python", "¿que paso?", "que mal servicio!!!"]:
-        reply = send(text)["reply"]
-        assert reply["wording_status"] == "deterministic"
-        assert not reply["finished"]
+        response = send(text)["reply"]
+        assert response["wording_status"] == "validated"
+        assert not response["finished"]
+        assert observed[-1]["current_message"] == text
     assert "solicitud de atención de un asesor" in send("¿qué pasó?")["reply"]["text"]
 
 
