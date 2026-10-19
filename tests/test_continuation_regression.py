@@ -15,6 +15,8 @@ from agents.collections.continuation import interpret_continuation
 from agents.collections.conversation import LEGACY_CLOSE
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext
+from agents.collections.semantic import understand_turn
+from agents.collections.semantic_state import bind_understanding
 
 
 @pytest.fixture
@@ -153,18 +155,37 @@ def test_legitimate_terminal_outcomes_classify_once_without_reopening(
 def test_redacted_context_is_bounded(continuation, monkeypatch):
     _, ctx, _ = continuation
     captured = []
-    model_stub(monkeypatch, {"intent": "resume"}, captured)
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
     ctx.provider = "anthropic"
     secret = "123456789 1111 test@example.com https://example.com/account"
     history = [HumanMessage(content=secret + "x" * 700), AIMessage(content="¿Quieres seguir?")] * 8
-    state = {"text": "sigue " + secret, "messages": history + [HumanMessage(content="sigue")]}
+    state = {"event_id": "bounded-context", "text": "sigue"}
+    meaning = understand_turn(
+        state["text"],
+        ctx=ctx,
+        today=ctx.today,
+        stage="closed",
+        history=history,
+        context={"recoverable_misclosure": True},
+    )
+    state["semantic_result"] = bind_understanding(state, meaning)
     assert interpret_continuation(state, {}, ctx) == ("resume", "classified")
+    assert len(captured) == 1
     serialized = json.dumps(captured[0])
     assert not any(
         value in serialized for value in ["123456789", "1111", "test@example.com", "https://"]
     )
-    assert len(captured[0]["recent_dialogue"]) <= 6
+    assert len(captured[0]["recent_dialogue"]) <= 4
     assert all(len(turn["text"]) <= 600 for turn in captured[0]["recent_dialogue"])
+
+
+def test_continuation_without_bound_meaning_never_calls_a_model(continuation, monkeypatch):
+    _, ctx, _ = continuation
+    captured = []
+    model_stub(monkeypatch, {"intent": "continue"}, captured)
+    ctx.provider = "anthropic"
+    assert interpret_continuation({"text": "sigue"}, {}, ctx) == ("unclear", "model_error")
+    assert captured == []
 
 
 def test_current_message_keeps_late_negation_beyond_history_excerpt_limit(
