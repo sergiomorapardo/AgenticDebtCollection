@@ -29,6 +29,12 @@ An affirmative answer to another question is not acceptance. Consider the last a
 {% elif stage in ["closed", "handoff", "agreed"] %}
 Interpret what the customer wants, including continue, stop, questions, and complaints, but NEVER
 claim permission to reopen. Only backend rules can decide whether a closure is recoverable.
+{% if stage == "closed" %}
+An acknowledgement of a closing statement ("ok, gracias", "dale, gracias", "entendido") is unclear,
+NOT continue. continue requires a current request to resume this conversation or a clear affirmative
+answer to an explicit invitation to resume, not mere politeness after the assistant says it will stop.
+"Quiero que sigamos revisando las opciones de pago" is a request to resume; "gracias, hasta luego" is not.
+{% endif %}
 {% else %}
 Identity verification and commercial state belong to the backend. Interpret requests for account
 history, payment options, hardship and negotiation in the current conversational context.

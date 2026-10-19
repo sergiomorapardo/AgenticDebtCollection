@@ -8,6 +8,9 @@
 - Create every new branch as `feature/<name>`, where `<name>` is a short, descriptive, lowercase kebab-case slug.
 - For an independent change, start the branch from the repository's current default branch unless the user explicitly selects another base.
 - Never commit directly to `main`, `master`, `develop`, or another protected branch.
+- Before starting changes and immediately before each squash merge, run `git pull --ff-only origin main` from the clean primary checkout. If it cannot fast-forward, inspect the divergence and preserve local work; never reset or force the update.
+- Update the isolated feature branch against the refreshed default branch and resolve conflicts before merging. For a stack, update its bottom layer against the default branch, then propagate changes through each immediate base in order. Do not bypass existing authorization requirements for history rewrites or force-pushes.
+- After updating branches or resolving conflicts, rerun relevant checks and re-request review when the changes require it. Verify each PR still changes at most 12 files against its immediate base.
 - Preserve unrelated user changes and do not rewrite remote history or force-push without explicit authorization.
 
 ## Commits and pull requests
@@ -21,6 +24,12 @@
 - Cleanup must verify merged PR evidence against current main, including tree equality for squash/rebased branches. Preserve branch history in a Git bundle and non-rebuildable ignored data in restricted local backups under `.validation/worktree-cleanup/` before removal. Never print credentials or commit these backups.
 - `python3 scripts/cleanup_merged.py` audits without deleting; `--apply` performs the authorized cleanup. Preserve unmerged work and report any skipped branches instead of forcing removal.
 - Review each finished pull request and run checks appropriate to its stage before proceeding. State any validation that requires a later integration layer.
+- Immediately after creating any pull request, including each stacked layer, post a comment mentioning `@claude` and explicitly ask Claude to review the pull request. This triggers the `Claude Code` workflow in `.github/workflows/claude.yml`.
+- Wait for that workflow run to finish successfully and for Claude to publish its completed review; read all feedback, including inline comments. A successful workflow without a completed review, an acknowledgment, or no response does not satisfy this requirement.
+- If the workflow fails or is cancelled, or no completed review is available within 15 minutes of the request, report the blocker and investigate or retry as appropriate. Elapsed time does not waive the review requirement; do not proceed until the review is complete.
+- Evaluate each comment against the code, requirements, and product goals. Implement feedback that is valid, improves the product, and is in scope for this PR. Explain on the pull request why a suggestion is not applicable; record useful out-of-scope suggestions as follow-up work without exceeding the 12-file limit. Fix blocking issues before proceeding.
+- Address all actionable feedback and run the relevant checks for any changes. The PR author or agent must reply with the outcome and resolve review threads only after their concerns have been addressed. Request another review with `@claude` after substantive fixes that change behavior, contracts, or workflow requirements, and repeat this cycle for any new actionable feedback; spelling or formatting-only fixes do not require another review.
+- Continue to the next dependent group or merge only after this review cycle is complete and the existing check and approval requirements are satisfied.
 
 - Use Conventional Commits for every commit: `<type>(<optional-scope>): <description>`.
 - Prefer these types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore`, and `revert`.
