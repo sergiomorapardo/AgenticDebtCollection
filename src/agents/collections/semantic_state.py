@@ -1,6 +1,7 @@
 """Bind internal semantic results to the current event, never to public input."""
 
 import hashlib
+import re
 
 from agents.collections.semantic import TurnResult, TurnUnderstanding
 
@@ -31,8 +32,26 @@ def current_understanding(state) -> TurnResult | None:
             or envelope["status"] not in {"classified", "mock", "model_error"}
         ):
             raise ValueError("Semantic result does not belong to this turn")
+        turn = TurnUnderstanding.model_validate(envelope["turn"])
+        tokens = re.findall(
+            r"[0-9]+",
+            re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", state["text"]),
+        )
+        for field, index, role in (
+            ("identity_candidate", turn.identity_token, "identity"),
+            ("verification_candidate", turn.code_token, "verification_code"),
+        ):
+            candidate = envelope.get(field)
+            if candidate is not None and (
+                turn.intent != role
+                or index is None
+                or index >= len(tokens)
+                or candidate != tokens[index]
+                or (role == "verification_code" and len(candidate) != 4)
+            ):
+                raise ValueError("Candidate is not grounded in this message")
         return TurnResult(
-            TurnUnderstanding.model_validate(envelope["turn"]),
+            turn,
             envelope["status"],
             envelope.get("identity_candidate"),
             envelope.get("verification_candidate"),
