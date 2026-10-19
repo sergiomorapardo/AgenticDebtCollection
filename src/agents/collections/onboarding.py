@@ -140,6 +140,7 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
         response = "Puedo aclarar tus dudas sobre la atención de cartera sin consultar ninguna cuenta. ¿Qué te gustaría saber?"
     if status == "model_error":
         response = "No pude interpretar tu mensaje por un error del servicio. No consulté tu cuenta ni registré cambios; puedes reintentar o escribir terminar."
+    append_step = intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
     wording_status, attempts = "deterministic", 0
     streamed = {}
     if ctx.provider == "anthropic" and status != "model_error":
@@ -173,11 +174,9 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
                 binding.get("onboarding_paused", False),
                 intent=intent,
                 stage=stage,
-                next_step=step,
+                next_step=None if append_step else step,
             )
-    if status != "model_error" and (
-        intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
-    ):
+    if status != "model_error" and append_step:
         response += " " + step
     binding["onboarding_intent"] = intent
     binding["onboarding_history"] = (

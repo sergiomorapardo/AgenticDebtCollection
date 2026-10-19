@@ -175,3 +175,18 @@ def test_optional_identity_step_is_authorized_only_when_not_paused(monkeypatch):
         )
         assert captured[-1]["next_step"] == (None if paused else "Comparte tu identificación.")
         assert "123456789" not in str(captured[-1])
+
+
+def test_reviewed_identity_step_has_one_owner(monkeypatch):
+    from agents.collections import onboarding
+
+    for intent in ("greeting", "willing", "identity_help"):
+        monkeypatch.setattr(onboarding, "classify_onboarding", lambda *args: intent)
+
+        def generate(*args, **kwargs):
+            assert kwargs["next_step"] is None
+            return "Claro, te ayudo.", "validated", 1
+
+        monkeypatch.setattr(onboarding, "contextual_reply", generate)
+        _, response = onboarding_reply("Quiero consultar", binding(), context())
+        assert response["text"].count("¿me compartes tu número de identificación?") == 1
