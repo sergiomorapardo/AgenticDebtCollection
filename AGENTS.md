@@ -21,6 +21,10 @@
 - Cleanup must verify merged PR evidence against current main, including tree equality for squash/rebased branches. Preserve branch history in a Git bundle and non-rebuildable ignored data in restricted local backups under `.validation/worktree-cleanup/` before removal. Never print credentials or commit these backups.
 - `python3 scripts/cleanup_merged.py` audits without deleting; `--apply` performs the authorized cleanup. Preserve unmerged work and report any skipped branches instead of forcing removal.
 - Review each finished pull request and run checks appropriate to its stage before proceeding. State any validation that requires a later integration layer.
+- Immediately after creating any pull request, post a comment mentioning `@claude` and explicitly ask Claude to review the pull request.
+- Wait for Claude to finish its review and read all review feedback, including inline comments. A pending review, an acknowledgment, or no response does not count as a completed review; if Claude is unavailable, report the blocker and do not proceed.
+- Evaluate each comment against the code, requirements, and product goals. Implement feedback that is valid and improves the product; explain on the pull request why any suggestion is not applicable or would not improve it instead of applying it blindly.
+- Address all actionable feedback, run the relevant checks for any changes, and reply to the review comments with the outcome. Resolve review threads only after their concerns have been addressed. Continue to the next dependent group or merge only after this review cycle is complete and the existing check and approval requirements are satisfied.
 
 - Use Conventional Commits for every commit: `<type>(<optional-scope>): <description>`.
 - Prefer these types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`, `ci`, `chore`, and `revert`.
