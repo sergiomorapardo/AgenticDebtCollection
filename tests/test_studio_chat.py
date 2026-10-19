@@ -76,12 +76,13 @@ def test_messages_only_end_to_end_and_replay(chat):
     } <= graph.get_graph().nodes.keys()
 
 
-def test_new_thread_requires_verification_then_recalls_agreement(chat):
+@pytest.mark.parametrize("customer", ["1000000001", "123456789"])
+def test_new_thread_requires_verification_then_recalls_agreement(chat, customer):
     send, ctx, _ = chat
     final = agree(send)
     greeting = send("Qué acordamos", "hello", "returning")
     assert final["reply"]["agreement_id"] not in greeting["messages"][-1].content
-    send("1000000001", "customer", "returning")
+    send(customer, "customer", "returning")
     wrong = send("verificar 0000", "wrong", "returning")
     assert "600,000" not in wrong["messages"][-1].content
     recalled = send("verificar 1111", "verify", "returning")
@@ -267,3 +268,199 @@ def test_attachments_are_rejected_without_identity_side_effects(chat):
             context=ctx,
         )
     assert not ctx.repository.agreements()
+
+
+def assert_no_internal_history(text):
+    for fragment in (
+        "Recuperé",
+        "Resumen de las",
+        "Estado:",
+        "Cliente:",
+        "Agente:",
+        "conservando el historial",
+        "cerró esta sesión por error",
+        "PRIVATE_TRANSCRIPT",
+    ):
+        assert fragment not in text
+
+
+@pytest.mark.parametrize("outcome", ["ready", "pending", "agreed", "closed", "handoff", "legacy"])
+def test_verified_recall_keeps_transcripts_internal_and_preserves_outcomes(chat, outcome):
+    import json
+
+    from agents.collections.conversation import LEGACY_CLOSE
+
+    send, ctx, _ = chat
+    initial = identify(send)
+    assert_no_internal_history(initial["messages"][-1].content)
+    assert "conversaciones anteriores" not in initial["messages"][-1].content
+    if outcome in {"pending", "agreed"}:
+        send("quiero 3 cuotas desde 2026-10-20", "proposal")
+    if outcome == "agreed":
+        send("confirmo", "confirm")
+    elif outcome == "closed":
+        send("terminar", "stop")
+    elif outcome == "handoff":
+        send("quiero un asesor", "advisor")
+    session_id = ChatMemory(ctx.repository).binding("first")["session_id"]
+    session = ctx.repository.get_session(session_id)
+    if outcome == "legacy":
+        session.update(stage="closed", pending_offer_id=None)
+        session["history"].append(
+            {
+                "event_id": "legacy",
+                "user": "ayudame a programar en python",
+                "assistant": LEGACY_CLOSE,
+            }
+        )
+    # The same marker remains in the bounded internal summary, never the chat response.
+    session["history"].extend(
+        [
+            {
+                "event_id": f"private-{i}",
+                "user": "PRIVATE_TRANSCRIPT",
+                "assistant": "PRIVATE_TRANSCRIPT",
+            }
+            for i in range(3)
+        ]
+    )
+    with ctx.repository.connection() as db:
+        db.execute("UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id))
+    agreements_before = len(ctx.repository.agreements())
+    recalled = identify(send, "returning")
+    assert "PRIVATE_TRANSCRIPT" in recalled["history_summary"]
+    assert_no_internal_history(recalled["messages"][-1].content)
+    assert recalled["reply"]["stage"] == session["stage"]
+    assert ctx.repository.get_session(session_id) == session
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+    assert len(ctx.repository.agreements()) == agreements_before
+    repeated = send("verificar 1111", "verify", "returning")
+    assert repeated["reply"] == recalled["reply"]
+    requested = send("¿Qué acordamos?", "history-request", "returning")
+    assert_no_internal_history(requested["messages"][-1].content)
+    if outcome == "legacy":
+        assert "opciones de pago" in recalled["reply"]["text"]
+        complaint = send("que mal servicio!!!", "complaint", "returning")
+        assert_no_internal_history(complaint["reply"]["text"])
+        assert complaint["reply"]["stage"] == "closed"
+        resumed = send("continuemos", "resume", "returning")
+        assert resumed["reply"]["stage"] == "ready"
+        assert_no_internal_history(resumed["reply"]["text"])
+        assert len(ctx.repository.agreements()) == agreements_before
+    elif outcome in {"closed", "handoff", "agreed"}:
+        assert send("continuemos", "resume", "returning")["reply"]["stage"] == session["stage"]
+
+
+@pytest.mark.parametrize("latest_stage", ["ready", "closed", "handoff"])
+def test_recall_preserves_commitments_from_earlier_sessions(chat, latest_stage):
+    import json
+
+    send, ctx, _ = chat
+    agreed = agree(send)
+    agreement_id = agreed["reply"]["agreement_id"]
+    earlier = ctx.repository.get_session(ChatMemory(ctx.repository).binding("first")["session_id"])
+    newer = {
+        **earlier,
+        "revision": 1,
+        "stage": latest_stage,
+        "agreement_id": None,
+        "pending_offer_id": None,
+        "history": [],
+        "close_reason": "customer_request",
+    }
+    with ctx.repository.connection() as db:
+        db.execute("INSERT INTO sessions VALUES (?,?,?)", ("newer", 1, json.dumps(newer)))
+    verified = identify(send, "returning")
+    requested = send("¿Qué acordamos?", "history-request", "returning")
+    for result in (verified, requested):
+        text = result["reply"]["text"]
+        assert agreement_id in text and "2026-12-20" in text
+        assert "pago no verificado" in text
+        assert "pago total o un plan" not in text
+        assert_no_internal_history(text)
+        assert result["reply"]["stage"] == latest_stage
+    assert ctx.repository.get_session("newer") == newer
+    assert len(ctx.repository.agreements()) == 1
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+@pytest.mark.parametrize(
+    "text", ["987654321", "ya te lo pase, era 987654321", "123", "10000000010"]
+)
+def test_unknown_identification_is_acknowledged_without_model_or_account_access(
+    chat, monkeypatch, text
+):
+    from agents.collections import chat as chat_module
+
+    send, ctx, _ = chat
+
+    def no_onboarding(*args):
+        raise AssertionError("Submitted identification must not be sent to the onboarding model")
+
+    monkeypatch.setattr(chat_module, "onboarding_reply", no_onboarding)
+    result = send(text, "unknown")
+    assert "No pude encontrar una cuenta" in result["reply"]["text"]
+    assert result["reply"]["stage"] == "awaiting_customer"
+    binding = ChatMemory(ctx.repository).binding("first")
+    assert binding["account_id"] is None and not binding["verified"]
+    assert binding["attempts"] == 0
+    assert not ctx.repository.contacts_for("demo-001")
+    assert not ctx.repository.agreements()
+
+
+def test_screenshot_unknown_id_then_code_then_correction(chat):
+    send, ctx, _ = chat
+    unknown = send("987654321", "unknown")
+    assert "No pude encontrar una cuenta" in unknown["reply"]["text"]
+    code = send("1111", "premature-code")
+    assert "primero necesito tu número de identificación" in code["reply"]["text"]
+    repeated = send("ya te lo pase, era 987654321", "repeated")
+    assert "No pude encontrar una cuenta" in repeated["reply"]["text"]
+    assert all("600,000" not in r["reply"]["text"] for r in (unknown, code, repeated))
+    assert ChatMemory(ctx.repository).binding("first")["attempts"] == 0
+    assert (
+        send("mi identificación es 1000000001", "corrected")["reply"]["stage"]
+        == "awaiting_identity"
+    )
+    assert send("1111", "verify")["reply"]["stage"] == "ready"
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+def test_multiple_numbers_require_disambiguation_before_identity_binding(chat):
+    send, ctx, _ = chat
+    result = send("1000000001 o 123456789", "multiple")
+    assert "Veo varios números" in result["reply"]["text"]
+    assert ChatMemory(ctx.repository).binding("first")["account_id"] is None
+    assert not ctx.repository.contacts_for("demo-001")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "quiero pagar 123 pesos",
+        "puedo pagar 123456789 COP",
+        "quiero 2 cuotas",
+        "la fecha es 2026-10-20",
+        "tengo 2 preguntas",
+        "2026-10-20",
+    ],
+)
+def test_payment_numbers_are_not_treated_as_identification(chat, monkeypatch, text):
+    from agents.collections import chat as chat_module
+
+    send, ctx, _ = chat
+    calls = []
+
+    def onboarding(text, binding, context):
+        calls.append(text)
+        return binding, {
+            "text": "Para consultar tu cuenta, necesito tu identificación.",
+            "stage": "awaiting_customer",
+            "finished": False,
+        }
+
+    monkeypatch.setattr(chat_module, "onboarding_reply", onboarding)
+    result = send(text, "payment")
+    assert calls == [text]
+    assert "No pude encontrar" not in result["reply"]["text"]
+    assert ChatMemory(ctx.repository).binding("first")["account_id"] is None

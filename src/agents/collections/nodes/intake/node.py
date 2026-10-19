@@ -97,7 +97,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
         return {
             **base,
-            "response_text": "Retomamos la conversación conservando el historial. No hay una oferta pendiente ni un nuevo compromiso. ¿Qué duda o dificultad de pago quieres revisar?",
+            "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
         }
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {

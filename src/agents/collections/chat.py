@@ -11,9 +11,9 @@ from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from typing_extensions import TypedDict
 
-from agents.collections.chat_memory import ChatMemory, summarize_history
+from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
-from agents.collections.conversation import requests_end
+from agents.collections.conversation import normalize_text, requests_end
 from agents.collections.nodes.intake.tools import verify_demo_code
 from agents.collections.onboarding import onboarding_reply
 from agents.collections.runtime import resolve_context
@@ -118,14 +118,38 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
 def identify_customer(state: ChatState, runtime: Runtime):
     memory = ChatMemory(resolve_context(runtime).repository)
     customers = json.loads((data_directory() / "fixtures/customers.json").read_text())
-    candidates = re.findall(r"(?<!\d)\d{9,10}(?!\d)", state["text"])
+    normalized = normalize_text(state["text"])
+    # Intercept apparent identity/code submissions, not incidental amounts or dates.
+    numeric_submission = re.fullmatch(r"[0-9]+(?:\s*(?:[,;]|o|y)\s*[0-9]+)*", normalized)
+    identity_submission = re.search(
+        r"\b(cedula|identificacion|documento|codigo|verificar)\b|"
+        r"\bmi numero\b|\bya te (?:lo )?(?:pase|di|envie|comparti)\b|"
+        r"^(?:es|era) [0-9]+$",
+        normalized,
+    )
+    candidates = (
+        re.findall(r"(?<!\w)[0-9]+(?!\w)", state["text"])
+        if numeric_submission or identity_submission
+        else []
+    )
     account = customers.get(candidates[0]) if len(candidates) == 1 else None
     if account is None:
         if candidates:
-            response = reply(
-                "No pude encontrar una cuenta con esa identificación. Revisa el número o dime si prefieres terminar."
-            )
-            return {"chat_reply": response}
+            if len(candidates) > 1:
+                text = (
+                    "Veo varios números. ¿Cuál es tu número de identificación? Compárteme solo uno."
+                )
+            elif len(candidates[0]) == 4:
+                text = (
+                    "Aún no he encontrado tu cuenta. Si ese número es el código de verificación, "
+                    "primero necesito tu número de identificación."
+                )
+            else:
+                text = (
+                    "No pude encontrar una cuenta con esa identificación. "
+                    "Revisa el número o dime si prefieres terminar."
+                )
+            return {"chat_reply": reply(text)}
         return respond_onboarding(state, runtime)
     with memory.repository.connection():
         binding = memory.binding(state["chat_thread"])
@@ -195,16 +219,7 @@ def recover_history(state: ChatState, runtime: Runtime):
         # Resume the same business conversation, with fresh verification for each Studio thread.
         session = history["sessions"][0]
         binding["session_id"] = session["session_id"]
-        text = summary
-        if session.get("pending_offer_id") and session["stage"] == "awaiting_confirmation":
-            offer = ctx.repository.get_offer(session["pending_offer_id"], binding["session_id"])
-            text += (
-                "\nPropuesta pendiente: "
-                + "; ".join(f"{p.amount_cop:,} COP el {p.due_date}" for p in offer.installments)
-                + ". ¿Confirmas estas fechas e importes?"
-            )
-        elif session["stage"] not in {"agreed", "closed", "handoff"}:
-            text += "\nPodemos continuar con el pago total o un plan de cuotas."
+        text = customer_history_reply(history, ctx.repository)
         response = memory.save_transition(
             state,
             binding,
@@ -244,7 +259,7 @@ def studio_intake(state: ChatState, runtime: Runtime):
         session.update(identity_verified=True, stage="ready")
         account = ctx.repository.get_account(binding["account_id"])
         result["response_text"] = (
-            f"Gracias, verifiqué tu identidad. {state.get('history_summary', '')} El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
+            f"Gracias, verifiqué tu identidad. El saldo registrado es {account.balance_cop:,} COP. ¿Prefieres pagar el total o explorar un plan de dos o tres cuotas?"
         )
     return result
 

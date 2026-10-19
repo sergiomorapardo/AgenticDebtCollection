@@ -11,7 +11,7 @@ The test names below are runnable with `uv run pytest -q -k <test_name>`.
 
 | Setup | Value |
 | --- | --- |
-| Customer A | ID `1000000001`; code `verificar 1111`; COP 600,000 |
+| Customer A | ID `1000000001` or `123456789` (same account); code `verificar 1111`; COP 600,000 |
 | Customer B | ID `1000000002`; code `verificar 2222`; COP 450,000 |
 | Clock | `COLLECTIONS_DEMO_NOW=2026-10-19T09:00:00-05:00` |
 | Provider | `COLLECTIONS_LLM_PROVIDER=mock`; no paid calls |
@@ -68,7 +68,7 @@ Coverage: [Studio chat tests](../tests/test_studio_chat.py),
 | ID-07 | Supply provider, repository, or structured values through runtime context | Reject untrusted dependencies; allow only transport metadata | A: `test_studio_context_rejects_client_dependencies` |
 | ID-08 | Studio sends text content blocks | Accept as human text; return an AI message | A+B: `test_studio_text_content_blocks_are_supported` |
 | ID-09 | Send an image attachment | Reject before identity or agreement writes | A: `test_attachments_are_rejected_without_identity_side_effects` |
-| ID-10 | Twenty prior conversations with long turns | Return a bounded factual summary of three sessions; preserve all originals | A: `test_summary_is_bounded_and_preserves_source_records` |
+| ID-10 | Twenty prior conversations with long turns | Keep a bounded internal summary of three sessions; preserve all originals | A: `test_summary_is_bounded_and_preserves_source_records` |
 | ID-11 | Lose graph checkpoints but retain the database and verified thread binding | Recover customer memory from backend storage | A: `test_backend_recovers_even_without_checkpoint_history` |
 | ID-12 | Change an existing business session's account | Reject account switching | A: `test_session_cannot_change_account` |
 
@@ -235,3 +235,11 @@ against Haiku with synthetic messages before integration.
 Testing notices and fixture instructions remain in the README. The dialogue identifies a
 virtual assistant and stays in character; it must not invent an actual company or claim a
 real transfer. The legacy false-closure signature remains unchanged for historical recovery.
+
+| ID | Trigger | Expected outcome | Evidence |
+| --- | --- | --- | --- |
+| UX-03 | Verify a returning customer or ask `¿Qué acordamos?` | Keep transcript excerpts/internal summaries out of chat; show authoritative account facts and next step; preserve terminal outcomes and replay | `test_verified_recall_keeps_transcripts_internal_and_preserves_outcomes` |
+| UX-04 | Historical false closure followed by complaint | Acknowledge poor service without technical recovery narration; require explicit continuation; preserve history and create no agreement | Same parametrized test, `legacy` case |
+
+| UX-05 | `987654321` → `1111` → `ya te lo pase, era 987654321` | Acknowledge missing account; explain premature code; accept corrected fixture ID without consuming verification attempts | `test_screenshot_unknown_id_then_code_then_correction`; Agent Server CI smoke |
+| UX-06 | Multiple numbers or unknown ID of another length | Ask for one ID or report no account; never guess, truncate, bind identity, or call onboarding model | Studio identification regression tests |
