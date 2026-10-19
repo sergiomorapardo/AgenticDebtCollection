@@ -80,7 +80,7 @@ def classify_onboarding(text, ctx, history=None):
     return "unclear"
 
 
-def onboarding_reply(text, binding, ctx):
+def onboarding_reply(text, binding, ctx, *, understanding=None):
     """Return an authorized reply and updated conversational memory, never business state."""
     binding = dict(binding)
     selected = bool(binding["account_id"])
@@ -92,10 +92,27 @@ def onboarding_reply(text, binding, ctx):
     )
     history = binding.get("onboarding_history", [])[-4:]
     status = "classified"
-    try:
-        intent = classify_onboarding(text, ctx, history)
-    except (APIError, ValueError, TimeoutError, ConnectionError):
-        intent, status = "unclear", "model_error"
+    if understanding is not None:
+        status = understanding.status
+        intent = {
+            "continue": "willing",
+            "promise": "willing",
+            "negotiate": "willing",
+            "options": "willing",
+            "refuse": "decline",
+            "identity": "identity_help",
+            "verification_code": "identity_help",
+            "off_topic": "scope",
+            "history": "scope",
+            "clarify_process": "scope",
+        }.get(understanding.turn.intent, understanding.turn.intent)
+        if intent not in {"greeting", "decline", "willing", "complaint", "scope", "identity_help"}:
+            intent = "unclear"
+    else:
+        try:
+            intent = classify_onboarding(text, ctx, history)
+        except (APIError, ValueError, TimeoutError, ConnectionError):
+            intent, status = "unclear", "model_error"
     previous = binding.get("onboarding_intent")
     if intent == "decline":
         binding["onboarding_paused"] = True
