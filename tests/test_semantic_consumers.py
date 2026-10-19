@@ -308,3 +308,120 @@ def test_options_apply_capacity_declared_in_same_turn(runtime, intent, capacity)
         assert result["session"]["stage"] == "ready"
         assert "3 cuotas mensuales" in result["response_text"]
         assert "200,000 COP" in result["response_text"]
+
+
+@pytest.mark.parametrize("intent", ["promise", "negotiate", "counteroffer", "unclear"])
+def test_explicit_monthly_capacity_routes_to_negotiation_even_when_labeled_promise(runtime, intent):
+    state = state_for(
+        intent,
+        text="Puedo pagar 250 mil al mes",
+        amount_cop=250000,
+        amount_is_capacity=True,
+        frequency="monthly",
+    )
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["intent_route"] == "negotiation"
+    assert result["interpretation"]["intent"] == "counteroffer"
+    assert result["session"]["draft_terms"] == {
+        "route": "negotiation",
+        "amount_cop": 250000,
+        "amount_is_capacity": True,
+    }
+    assert result["session"]["dialogue"]["monthly_capacity_cop"] == 250000
+    assert result["session"]["pending_offer_id"] is None
+
+
+@pytest.mark.parametrize("intent", ["promise", "negotiate", "counteroffer", "unclear"])
+@pytest.mark.parametrize("route", ["promise", "negotiation"])
+def test_date_only_turn_completes_existing_financial_terms(runtime, intent, route):
+    state = state_for(intent, text="Mañana me sirve", payment_date="2026-10-20")
+    previous = {
+        "route": route,
+        "installments": 3 if route == "negotiation" else 1,
+        "amount_cop": 250000 if route == "negotiation" else 600000,
+        "amount_is_capacity": route == "negotiation",
+    }
+    state["session"].update(
+        stage="awaiting_terms",
+        draft_terms=deepcopy(previous),
+        dialogue={"awaiting": "date", "monthly_capacity_cop": 250000},
+    )
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["intent_route"] == route
+    assert result["session"]["draft_terms"] == {**previous, "payment_date": "2026-10-20"}
+    assert result["session"]["dialogue"]["monthly_capacity_cop"] == 250000
+    assert result["session"]["pending_offer_id"] is None
+
+
+def test_date_only_counteroffer_invalidates_old_offer_without_losing_terms(runtime):
+    state = state_for("counteroffer", text="Mejor el martes", payment_date="2026-10-20")
+    state["session"].update(
+        stage="awaiting_confirmation",
+        pending_offer_id="old-offer",
+        draft_terms={"route": "negotiation", "installments": 3, "payment_date": "2026-10-19"},
+    )
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["intent_route"] == "negotiation"
+    assert result["session"]["draft_terms"] == {
+        "route": "negotiation",
+        "installments": 3,
+        "payment_date": "2026-10-20",
+    }
+    assert result["session"]["pending_offer_id"] is None
+    assert result["session"]["stage"] == "awaiting_terms"
+
+
+@pytest.mark.parametrize(
+    "intent, route",
+    [
+        ("end", "close"),
+        ("dispute", "handoff"),
+        ("request_exception", "handoff"),
+    ],
+)
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"amount_cop": 250000, "amount_is_capacity": True, "frequency": "monthly"},
+        {"payment_date": "2026-10-20"},
+    ],
+)
+def test_financial_fields_never_override_terminal_or_exception_intents(
+    runtime, intent, route, fields
+):
+    state = state_for(intent, **fields)
+    previous = {"route": "negotiation", "installments": 3}
+    state["session"]["draft_terms"] = deepcopy(previous)
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["interpretation"]["intent"] == intent
+    assert result["intent_route"] == route
+    assert result["session"]["draft_terms"] == previous
+
+
+def test_conditional_acceptance_with_date_does_not_become_draft_continuation(runtime):
+    state = state_for(
+        "accept_offer",
+        acceptance="conditional",
+        payment_date="2026-10-20",
+        text="Acepto si cambia la fecha",
+    )
+    state["session"]["draft_terms"] = {"route": "negotiation", "installments": 3}
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["interpretation"]["intent"] == "reject_offer"
+    assert result["intent_route"] != "confirmation"
+    assert result["session"]["pending_offer_id"] is None
+
+
+@pytest.mark.parametrize("fields", [{"frequency": "one_off"}, {"installments": 1}])
+def test_explicit_one_off_payment_does_not_inherit_previous_installment_plan(runtime, fields):
+    state = state_for("promise", payment_date="2026-10-20", **fields)
+    state["session"]["draft_terms"] = {
+        "route": "negotiation",
+        "installments": 3,
+        "amount_cop": 250000,
+        "amount_is_capacity": True,
+    }
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["intent_route"] == "promise"
+    assert result["session"]["draft_terms"].get("installments", 1) == 1
+    assert "amount_is_capacity" not in result["session"]["draft_terms"]

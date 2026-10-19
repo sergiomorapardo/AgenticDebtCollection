@@ -71,6 +71,28 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                         "amount_is_capacity": monthly,
                     }
                 )
+        financial_intents = {"promise", "negotiate", "counteroffer", "unclear"}
+        if (
+            parsed.intent in financial_intents
+            and parsed.amount_cop is not None
+            and parsed.amount_is_capacity
+            and parsed.frequency != "one_off"
+        ):
+            # A recurring capacity is not a promise to settle the full balance.
+            parsed = parsed.model_copy(update={"intent": "counteroffer"})
+        previous_route = session.get("draft_terms", {}).get("route")
+        if (
+            parsed.intent in financial_intents
+            and parsed.payment_date is not None
+            and parsed.amount_cop is None
+            and parsed.installments is None
+            and parsed.frequency == "unspecified"
+            and previous_route in {"promise", "negotiation"}
+        ):
+            # A date answer completes the backend's selected terms, not a new payment type.
+            parsed = parsed.model_copy(
+                update={"intent": "promise" if previous_route == "promise" else "negotiate"}
+            )
         if parsed.intent in {"options", "continue", "no_capacity", "scope", "history", "greeting"}:
             if parsed.amount_cop is not None and parsed.amount_is_capacity:
                 session["dialogue"] = {
