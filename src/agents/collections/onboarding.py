@@ -43,7 +43,10 @@ def onboarding_reply(text, binding, ctx, *, understanding):
         if selected
         else "Para consultar tu cuenta, ¿me compartes tu número de identificación?"
     )
-    history = binding.get("onboarding_history", [])[-4:]
+    history = [
+        {key: redact_dialogue(value) for key, value in turn.items()}
+        for turn in binding.get("onboarding_history", [])[-4:]
+    ]
     status = "model_error"
     intent = "unclear"
     if understanding is not None and understanding.status != "model_error":

@@ -167,3 +167,124 @@ def test_internal_model_callbacks_do_not_emit_customer_messages():
         .compile()
     )
     assert list(graph.stream({"value": ""}, stream_mode="messages")) == []
+
+
+class MarkerStreamingModel(BaseChatModel):
+    consumed: ClassVar[Event] = Event()
+    calls: ClassVar[int] = 0
+    pieces: ClassVar[tuple] = ()
+    interrupt: ClassVar[bool] = False
+
+    @property
+    def _llm_type(self):
+        return "marker-streaming-test"
+
+    def _generate(self, *args, **kwargs):
+        raise AssertionError("Must stream")
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        type(self).calls += 1
+        for index, content in enumerate(self.pieces):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=content))
+            if index == 0:
+                assert self.consumed.wait(5), (
+                    "Safe opening text must arrive before the remaining tokens"
+                )
+        if self.interrupt:
+            raise TimeoutError("Disconnected inside a redaction marker")
+
+
+@pytest.mark.parametrize(
+    "pieces,interrupted,expected",
+    [
+        (
+            ("Tu código [", "num", "ber] y [re", "dacted] o <num", "ber_", "42", "> [opcional]"),
+            False,
+            "Tu código ese dato y ese dato o ese dato [opcional]",
+        ),
+        (
+            ("Tu código [", "num"),
+            True,
+            "Tu código ese dato\nLa respuesta se interrumpió; puedes reintentar.",
+        ),
+        (("Tu código <", "number_12"), False, "Tu código ese dato"),
+        (
+            ([{"type": "text", "text": "Tu código ["}], [{"type": "text", "text": "NUMBER]"}]),
+            False,
+            "Tu código ese dato",
+        ),
+    ],
+)
+def test_actual_graph_stream_filters_split_markers_before_callbacks_and_persistence(
+    setup, monkeypatch, pieces, interrupted, expected
+):
+    from agents.collections.customer_text import contains_internal_marker
+
+    graph, ctx, config = setup
+    MarkerStreamingModel.pieces = pieces
+    MarkerStreamingModel.interrupt = interrupted
+    MarkerStreamingModel.calls = 0
+    MarkerStreamingModel.consumed.clear()
+    monkeypatch.setitem(
+        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=MarkerStreamingModel)
+    )
+    request = {"messages": [HumanMessage(content="¿Eres un bot?", id="marker-question")]}
+    all_chunks = []
+    for mode, value in graph.stream(
+        request, config=config, context=ctx, stream_mode=["messages", "values"]
+    ):
+        if mode == "values":
+            final = value
+        else:
+            message, metadata = value
+            if isinstance(message, AIMessageChunk):
+                # Inspect ALL graph model chunks, not only a UI tag filter. Raw provider
+                # callbacks must never reach this channel, even with internal tags.
+                all_chunks.append(message)
+                assert "customer_reply" in metadata.get("tags", [])
+                assert "langsmith:nostream" not in metadata.get("tags", [])
+                assert not contains_internal_marker(message.content)
+                MarkerStreamingModel.consumed.set()
+    assert all_chunks[0].content == "Tu código "
+    visible = "".join(chunk.content for chunk in all_chunks)
+    assert visible == expected == final["reply"]["text"] == final["messages"][-1].content
+    assert all(chunk.id == final["reply"]["message_id"] for chunk in all_chunks)
+    assert final["reply"]["wording_status"] == ("interrupted" if interrupted else "streamed")
+    assert final["reply"]["first_token_ms"] is not None
+    replay = graph.invoke(request, config=config, context=ctx)
+    assert replay["reply"] == final["reply"] and len(replay["messages"]) == 2
+    assert MarkerStreamingModel.calls == 1
+    assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_whitespace_only_stream_returns_visible_error_and_persists_exact_output(
+    setup, monkeypatch, interrupted
+):
+    graph, ctx, config = setup
+    MarkerStreamingModel.pieces = ("  ", "\n", "\t")
+    MarkerStreamingModel.interrupt = interrupted
+    MarkerStreamingModel.consumed.clear()
+    monkeypatch.setitem(
+        sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=MarkerStreamingModel)
+    )
+    chunks = []
+    request = {"messages": [HumanMessage(content="¿Eres un bot?", id="whitespace")]}
+    for mode, value in graph.stream(
+        request, config=config, context=ctx, stream_mode=["messages", "values"]
+    ):
+        if mode == "values":
+            final = value
+        elif isinstance(value[0], AIMessageChunk):
+            chunks.append(value[0])
+            MarkerStreamingModel.consumed.set()
+    assert final["reply"]["wording_status"] == "model_error"
+    assert "No pude generar la respuesta" in final["reply"]["text"]
+    assert (
+        "".join(chunk.content for chunk in chunks)
+        == final["reply"]["text"]
+        == final["messages"][-1].content
+    )
+    assert all(chunk.id == final["reply"]["message_id"] for chunk in chunks)
+    assert graph.invoke(request, config=config, context=ctx)["reply"] == final["reply"]
+    assert not ctx.repository.agreements()

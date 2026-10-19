@@ -6,6 +6,7 @@ import re
 from anthropic import APIError
 from pydantic import BaseModel, ConfigDict, Field
 
+from agents.collections.customer_text import contains_internal_marker
 from agents.collections.prompts import render_prompt
 from agents.collections.runtime import resolve_context
 
@@ -82,6 +83,7 @@ def _dialogue_payload(state):
     return {
         "reference": state["wording_reference"],
         "current_message": redact_dialogue(state.get("text", ""), max_length=None),
+        "mentions_internal_marker": contains_internal_marker(state.get("text", "")),
         "recent_dialogue": history,
         "intent": state.get("interpretation", {}).get("intent"),
     }
@@ -122,7 +124,7 @@ def review_reply(state, runtime):
         candidate,
         re.IGNORECASE,
     )
-    if candidate and not prohibited:
+    if candidate and not prohibited and not contains_internal_marker(candidate):
         try:
             result = _request(
                 resolve_context(runtime),

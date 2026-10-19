@@ -5,6 +5,7 @@ import re
 from anthropic import APIError
 from pydantic import BaseModel, ConfigDict
 
+from agents.collections.customer_text import contains_internal_marker, sanitize_customer_text
 from agents.collections.prompts import render_prompt
 from agents.collections.wording import ReplyDraft, _request
 
@@ -23,8 +24,9 @@ REVIEW_PROMPT = render_prompt("onboarding_review")
 
 
 def redact_dialogue(text, *, max_length=600):
-    text = re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", text)
-    redacted = re.sub(r"\d+", "[number]", text)
+    text = sanitize_customer_text(text)
+    text = re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "un dato de contacto", text)
+    redacted = re.sub(r"\d+", "una cifra", text)
     return redacted if max_length is None else redacted[:max_length]
 
 
@@ -35,7 +37,9 @@ def contextual_reply(
     payload = {
         "current_message": redact_dialogue(text, max_length=None),
         "next_step": next_step if not paused else None,
-        "recent_dialogue": history[-4:],
+        "recent_dialogue": [
+            {key: redact_dialogue(value) for key, value in turn.items()} for turn in history[-4:]
+        ],
         "reference": redact_dialogue(reference),
         "paused": paused,
         "intent": intent,
@@ -50,7 +54,7 @@ def contextual_reply(
                 re.IGNORECASE,
             )
             repeated = any(candidate == turn["assistant"] for turn in history[-2:])
-            if not prohibited and not repeated:
+            if not prohibited and not repeated and not contains_internal_marker(candidate):
                 review = _request(
                     ctx, OnboardingReview, REVIEW_PROMPT, {**payload, "candidate": candidate}
                 )

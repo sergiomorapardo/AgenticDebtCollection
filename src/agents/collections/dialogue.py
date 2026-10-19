@@ -16,6 +16,50 @@ def plan_dialogue(state, runtime):
             "intent_route": "response",
             "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
         }
+    if intent in {"negotiate", "counteroffer"} and session.get("identity_verified"):
+        meaning = understanding.turn
+        ctx = resolve_context(runtime)
+        policy = load_policy()
+        account = ctx.repository.get_account(session["account_id"])
+        too_many = (
+            meaning.installments is not None and meaning.installments > policy.max_installments
+        )
+        too_little = (
+            meaning.amount_cop is not None
+            and (meaning.amount_is_capacity or meaning.frequency == "monthly")
+            and meaning.amount_cop * policy.max_installments < account.balance_cop
+        )
+        if too_many or too_little:
+            # Interpretation preserves requested values. Only backend policy decides
+            # feasibility; never silently clamp the request into an accepted offer.
+            # New counterterms invalidate the old offer to prevent stale acceptance.
+            needs_review = too_many or meaning.amount_is_capacity
+            session.update(
+                stage="handoff" if needs_review else "ready",
+                pending_offer_id=None,
+                draft_terms={},
+            )
+            if needs_review:
+                session["handoff_reason"] = "outside_policy"
+            dialogue["awaiting"] = None if needs_review else "option"
+            session["dialogue"] = dialogue
+            minimum = (account.balance_cop + policy.max_installments - 1) // policy.max_installments
+            requested = (
+                f"No puedo ofrecer {meaning.installments:,} cuotas. "
+                if too_many
+                else f"No puedo ofrecer cuotas de {meaning.amount_cop:,} COP para cubrir este saldo. "
+            )
+            return {
+                "session": session,
+                "intent_route": "response",
+                "response_text": requested
+                + f"El máximo permitido es de {policy.max_installments} cuotas mensuales; con el saldo de {account.balance_cop:,} COP, ese plan tendría cuotas de hasta {minimum:,} COP. "
+                + (
+                    "Dejo registrada una solicitud de revisión, sin aprobar esas condiciones ni registrar un acuerdo."
+                    if needs_review
+                    else "Si no se ajusta a tu capacidad, puedes solicitar una revisión. No registré ningún acuerdo."
+                ),
+            }
     if intent in {"options", "continue"}:
         if not session.get("identity_verified"):
             return {
