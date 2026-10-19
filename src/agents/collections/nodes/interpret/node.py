@@ -3,7 +3,7 @@
 from langgraph.runtime import Runtime
 
 from agents.collections.runtime import AppContext, resolve_context
-from agents.collections.semantic_state import current_understanding
+from agents.collections.semantic_state import current_understanding, matches_confirmation_context
 from agents.collections.state import State
 
 
@@ -21,6 +21,7 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         parsed.acceptance != "unconditional_current_offer"
         or session["stage"] != "awaiting_confirmation"
         or not session.get("pending_offer_id")
+        or not matches_confirmation_context(state)
         or parsed.amount_is_capacity
         or parsed.frequency != "unspecified"
         or any(
@@ -28,7 +29,13 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             for value in (parsed.amount_cop, parsed.payment_date, parsed.installments)
         )
     ):
-        parsed = parsed.model_copy(update={"intent": "unclear"})
+        parsed = type(parsed).model_validate(
+            {
+                **parsed.model_dump(),
+                "intent": "unclear",
+                "acceptance": "conditional" if parsed.acceptance == "conditional" else "none",
+            }
+        )
     if parsed.acceptance == "conditional" and parsed.intent in {"accept_offer", "unclear"}:
         parsed = parsed.model_copy(update={"intent": "reject_offer"})
     if (

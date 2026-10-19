@@ -17,6 +17,7 @@ def bind_understanding(state, result: TurnResult) -> dict:
         "status": result.status,
         "identity_candidate": result.identity_candidate,
         "verification_candidate": result.verification_candidate,
+        "confirmation_context": confirmation_context(state),
     }
 
 
@@ -58,3 +59,30 @@ def current_understanding(state) -> TurnResult | None:
         )
     except (KeyError, TypeError, ValueError):
         return TurnResult(TurnUnderstanding(), "model_error")
+
+
+def confirmation_context(state) -> dict:
+    """Capture the backend snapshot to which a customer's acceptance applies."""
+    session = state.get("session") or {}
+    return {
+        "session_id": state.get("session_id"),
+        "account_id": session.get("account_id"),
+        "stage": session.get("stage"),
+        "identity_verified": session.get("identity_verified"),
+        "pending_offer_id": session.get("pending_offer_id"),
+        "revision": session.get("revision"),
+    }
+
+
+def matches_confirmation_context(state) -> bool:
+    """An acceptance cannot migrate to a different offer or session revision."""
+    current = confirmation_context(state)
+    expected = (state.get("semantic_result") or {}).get("confirmation_context")
+    return bool(
+        expected == current
+        and current["session_id"]
+        and current["account_id"]
+        and current["identity_verified"] is True
+        and current["stage"] == "awaiting_confirmation"
+        and current["pending_offer_id"]
+    )

@@ -78,3 +78,16 @@ def test_checkpoint_candidate_must_still_exist_in_current_message():
     )
     result = current_understanding(state)
     assert result.status == "model_error" and result.verification_candidate is None
+
+
+def test_checkpoint_candidate_index_must_be_in_range():
+    state = {"event_id": "one", "text": "Mi código es 1111"}
+    state["semantic_result"] = bind_understanding(
+        state,
+        TurnResult(
+            TurnUnderstanding(intent="verification_code", code_token=9),
+            "classified",
+            verification_candidate="1111",
+        ),
+    )
+    assert current_understanding(state).status == "model_error"
