@@ -220,6 +220,8 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
     if requests_end(text):
         return TurnUnderstanding(intent="end")
     normalized = normalize_text(text)
+    if re.search(r"\b(historial|resumen|acordamos|acordado)\b", normalized):
+        return TurnUnderstanding(intent="history")
     identity_submission = re.fullmatch(r"[0-9]+", normalized) or re.search(
         r"\b(cedula|identificacion|documento|codigo|verificar)\b|"
         r"\bmi numero\b|\bya te (?:lo )?(?:pase|di|envie|comparti)\b|"
@@ -270,6 +272,12 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
             return TurnUnderstanding(intent="promise", frequency="one_off")
     parsed = parse_turn(text, today=today, provider="mock")
     fields = parsed.model_dump(exclude={"identity_code"})
+    if (
+        context.get("dialogue", {}).get("awaiting") == "capacity"
+        and fields["intent"] == "unclear"
+        and fields["amount_cop"] is not None
+    ):
+        fields.update(intent="counteroffer", amount_is_capacity=True)
     if fields["intent"] == "accept_offer":
         if stage == "awaiting_confirmation":
             fields["acceptance"] = "unconditional_current_offer"
