@@ -122,7 +122,9 @@ def route_chat_message(state: ChatState, runtime: Runtime):
                 "interpretation_status": "model_error",
             },
         }
-    if (not binding["verified"] or not binding["session_id"]) and understanding.turn.intent == "end":
+    if (
+        not binding["verified"] or not binding["session_id"]
+    ) and understanding.turn.intent == "end":
         binding["closed"] = True
         response = memory.save_transition(
             state,
