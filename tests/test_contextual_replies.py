@@ -265,3 +265,50 @@ def test_wording_payload_does_not_recycle_historical_markers_or_identifiers():
     assert not contains_internal_marker(encoded)
     assert "123456789" not in encoded and "test@example.com" not in encoded
     assert "una cifra" in encoded
+
+
+@pytest.mark.parametrize(
+    "terms,expected",
+    [
+        ({"intent": "negotiate", "installments": 1000}, "1,000 cuotas"),
+        ({"intent": "negotiate", "amount_cop": 1, "frequency": "monthly"}, "1 COP"),
+    ],
+)
+def test_invalid_plan_is_explained_by_backend_without_wording_or_agreement(
+    setup, monkeypatch, terms, expected
+):
+    from agents.collections import semantic
+    from agents.collections.chat_memory import ChatMemory
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    ctx, _ = setup
+    ctx.provider = "mock"
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "invalid-plan"}}
+
+    def send(text, event):
+        return graph.invoke(
+            {"messages": [HumanMessage(content=text, id=event)]}, config=config, context=ctx
+        )
+
+    send("123456789", "identify")
+    send("1111", "verify")
+    send("3 cuotas mañana", "old-offer")
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(TurnUnderstanding(**terms), "classified"),
+    )
+    ctx.provider = "anthropic"
+    monkeypatch.setattr(
+        wording, "_request", lambda *args: pytest.fail("Financial boundary must not be rewritten")
+    )
+    result = send("An invalid plan interpreted by the model", "invalid")
+    assert expected in result["reply"]["text"]
+    assert "3 cuotas" in result["reply"]["text"] and "200,000 COP" in result["reply"]["text"]
+    assert result["reply"]["offer_id"] is None
+    assert result["reply"]["stage"] == ("handoff" if terms.get("installments") else "ready")
+    assert not ctx.repository.agreements()
+    session_id = ChatMemory(ctx.repository).binding("invalid-plan")["session_id"]
+    assert ctx.repository.get_session(session_id)["draft_terms"] == {}
+    assert send("An invalid plan interpreted by the model", "invalid")["reply"] == result["reply"]
