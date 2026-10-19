@@ -273,7 +273,6 @@ def test_wording_payload_does_not_recycle_historical_markers_or_identifiers():
     [
         ({"intent": "negotiate", "installments": 1000}, "1,000 cuotas"),
         ({"intent": "negotiate", "amount_cop": 1, "frequency": "monthly"}, "1 COP"),
-        ({"intent": "negotiate", "amount_cop": 1}, "1 COP"),
     ],
 )
 def test_invalid_plan_is_explained_by_backend_without_wording_or_agreement(
@@ -314,3 +313,40 @@ def test_invalid_plan_is_explained_by_backend_without_wording_or_agreement(
     session_id = ChatMemory(ctx.repository).binding("invalid-plan")["session_id"]
     assert ctx.repository.get_session(session_id)["draft_terms"] == {}
     assert send("An invalid plan interpreted by the model", "invalid")["reply"] == result["reply"]
+
+
+@pytest.mark.parametrize("frequency", ["unspecified", "one_off"])
+def test_small_amount_without_monthly_recurrence_is_not_rejected_as_installment(
+    setup, monkeypatch, frequency
+):
+    from agents.collections import semantic
+    from agents.collections.chat_memory import ChatMemory
+    from agents.collections.semantic import TurnResult, TurnUnderstanding
+
+    ctx, _ = setup
+    ctx.provider = "mock"
+    graph = build_graph(studio=True, checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "ambiguous-amount"}}
+    for index, text in enumerate(["123456789", "1111", "qué opciones tengo"]):
+        graph.invoke(
+            {"messages": [HumanMessage(content=text, id=str(index))]}, config=config, context=ctx
+        )
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda *args, **kwargs: TurnResult(
+            TurnUnderstanding(intent="negotiate", amount_cop=1000, frequency=frequency),
+            "classified",
+        ),
+    )
+    result = graph.invoke(
+        {"messages": [HumanMessage(content="Un abono pequeño", id="amount")]},
+        config=config,
+        context=ctx,
+    )
+    assert "No puedo ofrecer cuotas" not in result["reply"]["text"]
+    assert "único abono" in result["reply"]["text"]
+    assert result["reply"]["offer_id"] is None
+    session_id = ChatMemory(ctx.repository).binding("ambiguous-amount")["session_id"]
+    assert ctx.repository.get_session(session_id)["dialogue"]["awaiting"] == "frequency"
+    assert not ctx.repository.agreements()
