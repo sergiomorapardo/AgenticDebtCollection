@@ -333,6 +333,72 @@ def test_zero_only_normalizes_explicit_no_capacity(model_call, intent, status):
     assert result.turn.amount_cop is None
 
 
+def test_positive_capacity_cannot_be_discarded_as_no_capacity(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "no_capacity",
+        "amount_cop": 250000,
+        "amount_is_capacity": True,
+        "frequency": "monthly",
+    }
+    result = understand_turn(
+        "solo puedo destinar 250 mil al mes", ctx=CONTEXT, today=TODAY, stage="ready"
+    )
+    assert result.status == "model_error" and result.turn.intent == "unclear"
+    assert result.turn.amount_cop is None
+
+
+def test_positive_capacity_survives_prior_refusal_and_limited_funds(model_call):
+    calls, response = model_call
+    response["result"] = {
+        "intent": "counteroffer",
+        "amount_cop": 250000,
+        "amount_is_capacity": True,
+        "frequency": "monthly",
+    }
+    result = understand_turn(
+        "solo puedo destinar 250 mil al mes",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="awaiting_terms",
+        history=[{"user": "no puedo pagar nada", "assistant": "¿Qué opción podemos revisar?"}],
+    )
+    assert result.turn.intent == "counteroffer" and result.turn.amount_cop == 250000
+    assert result.turn.amount_is_capacity and result.turn.frequency == "monthly"
+    assert json.loads(calls[0][1][1])["current_message"] == "solo puedo destinar 250 mil al mes"
+
+
+def test_date_only_turn_preserves_extracted_date_without_inventing_replacement_plan(model_call):
+    _, response = model_call
+    response["result"] = {"intent": "unclear", "payment_date": "2026-10-19"}
+    result = understand_turn(
+        "mañana",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="awaiting_terms",
+        context={
+            "draft_terms": {"installments": 3, "amount_cop": 250000, "amount_is_capacity": True},
+            "dialogue": {"awaiting": "date"},
+        },
+    )
+    assert result.turn.payment_date == date(2026, 10, 19)
+    assert result.turn.intent == "unclear"
+    assert result.turn.amount_cop is None and result.turn.installments is None
+
+
+def test_offline_explicit_full_payment_selects_one_installment():
+    result = understand_turn(
+        "pago completo el 2026-10-21",
+        ctx=SimpleNamespace(provider="mock"),
+        today=TODAY,
+        stage="awaiting_terms",
+        context={"draft_terms": {"installments": 3}},
+    )
+    assert result.turn.intent == "promise"
+    assert result.turn.installments == 1 and result.turn.frequency == "one_off"
+    assert result.turn.payment_date == date(2026, 10, 21)
+
+
 @pytest.mark.parametrize("intent", ["negotiate", "promise", "counteroffer", "unclear"])
 @pytest.mark.parametrize("stage", ["ready", "awaiting_confirmation"])
 def test_other_intents_cannot_carry_unconditional_acceptance(model_call, intent, stage):

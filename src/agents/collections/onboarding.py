@@ -50,7 +50,7 @@ def classify_onboarding(text, ctx, history=None):
                     "human",
                     json.dumps(
                         {
-                            "current_message": redact_dialogue(text),
+                            "current_message": redact_dialogue(text, max_length=None),
                             "recent_dialogue": (history or [])[-4:],
                         },
                         ensure_ascii=False,
@@ -140,6 +140,7 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
         response = "Puedo aclarar tus dudas sobre la atención de cartera sin consultar ninguna cuenta. ¿Qué te gustaría saber?"
     if status == "model_error":
         response = "No pude interpretar tu mensaje por un error del servicio. No consulté tu cuenta ni registré cambios; puedes reintentar o escribir terminar."
+    append_step = intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
     wording_status, attempts = "deterministic", 0
     streamed = {}
     if ctx.provider == "anthropic" and status != "model_error":
@@ -148,14 +149,14 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
             if intent not in {"willing", "identity_help"} and not (
                 not previous and intent == "greeting"
             ):
-                from agents.collections.onboarding_wording import DRAFT_PROMPT
                 from agents.collections.streaming import stream_reply
 
                 streamed = stream_reply(
                     ctx,
-                    DRAFT_PROMPT,
+                    render_prompt("onboarding_draft", stage=stage),
                     {
-                        "current_message": redact_dialogue(text),
+                        "current_message": redact_dialogue(text, max_length=None),
+                        "next_step": None if binding.get("onboarding_paused") else step,
                         "recent_dialogue": history,
                         "reference": redact_dialogue(response),
                         "intent": intent,
@@ -166,11 +167,16 @@ def onboarding_reply(text, binding, ctx, *, understanding=None):
                 response, wording_status, attempts = streamed["text"], streamed["wording_status"], 1
         else:
             response, wording_status, attempts = contextual_reply(
-                ctx, text, history, response, binding.get("onboarding_paused", False), intent=intent
+                ctx,
+                text,
+                history,
+                response,
+                binding.get("onboarding_paused", False),
+                intent=intent,
+                stage=stage,
+                next_step=None if append_step else step,
             )
-    if status != "model_error" and (
-        intent in {"willing", "identity_help"} or (not previous and intent == "greeting")
-    ):
+    if status != "model_error" and append_step:
         response += " " + step
     binding["onboarding_intent"] = intent
     binding["onboarding_history"] = (

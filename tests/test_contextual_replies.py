@@ -55,8 +55,14 @@ def test_grounded_reply_is_contextual_and_never_writes_agreements(setup, monkeyp
     current.update(wording.review_reply(current, runtime))
     assert current["response_text"] == candidate
     assert current["wording_status"] == "validated"
-    assert set(observed[0][1]) == {"reference", "previous_draft_rejected"}
-    assert "perdí mi trabajo" not in str(observed)
+    assert set(observed[0][1]) == {
+        "reference",
+        "current_message",
+        "recent_dialogue",
+        "intent",
+        "previous_draft_rejected",
+    }
+    assert observed[0][1]["current_message"] == "perdí mi trabajo"
     assert not ctx.repository.agreements()
 
 
@@ -175,3 +181,18 @@ def test_exact_dates_and_confirmations_do_not_depend_on_model(monkeypatch):
         parse_turn("confirmo", today=date(2026, 10, 19), provider="anthropic").intent
         == "accept_offer"
     )
+
+
+def test_writer_receives_full_current_message_and_bounded_private_history():
+    current = state()
+    current["wording_reference"] = current["response_text"]
+    current["text"] = "x" * 700 + " pero no quiero seguir; cédula 123456789"
+    current["session"]["history"] = [
+        {"user": "1111 " + "x" * 700, "assistant": "Contacto test@example.com"}
+    ] * 8
+    payload = wording._dialogue_payload(current)
+    assert "pero no quiero seguir" in payload["current_message"]
+    assert "123456789" not in str(payload) and "1111" not in str(payload)
+    assert "test@example.com" not in str(payload)
+    assert len(payload["recent_dialogue"]) == 4
+    assert len(payload["recent_dialogue"][0]["user"]) == 600
