@@ -126,7 +126,10 @@ class GraphRegistry:
         try:
             version = self._fingerprint()
             self._pending = version != self._version
-            if not self._pending or self._leases or (self._error and version == self._attempted):
+            if not self._pending:
+                self._error = False
+                return
+            if self._leases or (self._error and version == self._attempted):
                 return
             self._attempted = version
             manifest = json.loads((self.root / "langgraph.json").read_text())["graphs"]
