@@ -15,6 +15,7 @@ from agents.collections.nodes.response.node import compose_response
 from agents.collections.routes.after_confirmation.agent import route_after_confirmation
 from agents.collections.routes.after_intake.agent import route_after_intake
 from agents.collections.routes.intent.agent import route_intent
+from agents.collections.semantic_entry import understand_message
 from agents.collections.state import InputState, State
 from agents.collections.wording import draft_reply, prepare_reply, review_reply, route_wording
 
@@ -30,6 +31,7 @@ def build_graph(*, studio=False, checkpointer=None):
             human_input,
             identify_customer,
             recover_history,
+            route_chat_message,
             studio_intake,
             verify_identity,
         )
@@ -37,6 +39,7 @@ def build_graph(*, studio=False, checkpointer=None):
         builder = StateGraph(ChatState, input_schema=ChatInput)
         for name, node in {
             "human_input": human_input,
+            "route_chat_message": route_chat_message,
             "identify_customer": identify_customer,
             "verify_identity": verify_identity,
             "recover_history": recover_history,
@@ -46,6 +49,14 @@ def build_graph(*, studio=False, checkpointer=None):
         builder.add_edge(START, "human_input")
         builder.add_conditional_edges(
             "human_input",
+            lambda state: (
+                "assistant_message" if state.get("chat_reply") is not None else "understand_message"
+            ),
+            {"assistant_message": "assistant_message", "understand_message": "understand_message"},
+        )
+        builder.add_edge("understand_message", "route_chat_message")
+        builder.add_conditional_edges(
+            "route_chat_message",
             lambda state: state["chat_route"],
             {
                 name: name
@@ -72,8 +83,10 @@ def build_graph(*, studio=False, checkpointer=None):
         builder.add_edge("assistant_message", END)
     else:
         builder = StateGraph(State, input_schema=InputState)
-        builder.add_edge(START, "intake")
+        builder.add_edge(START, "understand_message")
+        builder.add_edge("understand_message", "intake")
         builder.add_edge("response", END)
+    builder.add_node("understand_message", understand_message)
     builder.add_node("intake", studio_intake if studio else prepare_turn)
     builder.add_node("interpret", interpret_turn)
     builder.add_node("dialogue_strategy", plan_dialogue)
