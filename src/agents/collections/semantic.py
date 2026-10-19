@@ -44,16 +44,25 @@ class TurnUnderstanding(BaseModel):
         "off_topic",
         "complaint",
         "clarify_process",
-    ] = "unclear"
+    ] = Field(
+        default="unclear",
+        description="Current meaning. Positive limited monthly capacity is counteroffer/negotiate, never no_capacity. no_capacity requires explicitly zero available money.",
+    )
     amount_cop: int | None = Field(
         default=None,
         gt=0,
         strict=True,
-        description="Explicit positive COP amount, or null. For no_capacity use null, never zero.",
+        description="Positive COP amount explicitly available/proposed NOW: 250 mil = 250000 even after hardship. Preserve it; do not copy prior amounts. no_capacity requires null.",
     )
-    amount_is_capacity: bool = False
+    amount_is_capacity: bool = Field(
+        default=False,
+        description="True for an explicitly stated maximum affordable monthly amount; limited positive capacity is not zero capacity.",
+    )
     frequency: Literal["monthly", "one_off", "unspecified"] = "unspecified"
-    payment_date: date | None = None
+    payment_date: date | None = Field(
+        default=None,
+        description="Date explicitly supplied in this turn, resolving relative dates from today. A date-only answer completes existing terms; it does not replace the plan with a full-payment promise.",
+    )
     installments: int | None = Field(default=None, gt=0, strict=True)
     acceptance: Literal["none", "conditional", "unconditional_current_offer"] = "none"
     identity_token: int | None = Field(
@@ -82,6 +91,12 @@ class TurnUnderstanding(BaseModel):
         ):
             return {**value, "amount_cop": None}
         return value
+
+    @model_validator(mode="after")
+    def reject_contradictory_capacity(self):
+        if self.intent == "no_capacity" and self.amount_cop is not None:
+            raise ValueError("Positive available capacity contradicts no_capacity")
+        return self
 
 
 @dataclass(frozen=True)
@@ -278,6 +293,10 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
         and fields["amount_cop"] is not None
     ):
         fields.update(intent="counteroffer", amount_is_capacity=True)
+    if fields["intent"] == "promise" and re.search(
+        r"\b(pago completo|pagar (?:el )?total|pagar todo|todo el saldo)\b", normalized
+    ):
+        fields.update(installments=1, frequency="one_off")
     if fields["intent"] == "accept_offer":
         if stage == "awaiting_confirmation":
             fields["acceptance"] = "unconditional_current_offer"
