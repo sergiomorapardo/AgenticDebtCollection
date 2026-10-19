@@ -166,6 +166,14 @@ def test_unconditional_acceptance_requires_current_backend_offer(runtime):
     state = state_for("accept_offer", acceptance="unconditional_current_offer")
     assert interpretation.interpret_turn(state, runtime)["intent_route"] != "confirmation"
     state["session"].update(stage="awaiting_confirmation", pending_offer_id="current-offer")
+    assert interpretation.interpret_turn(state, runtime)["intent_route"] != "confirmation"
+    state["semantic_result"] = bind_understanding(
+        state,
+        TurnResult(
+            TurnUnderstanding(intent="accept_offer", acceptance="unconditional_current_offer"),
+            "classified",
+        ),
+    )
     assert interpretation.interpret_turn(state, runtime)["intent_route"] == "confirmation"
 
 
@@ -530,3 +538,79 @@ def test_menu_clarification_preserves_new_meaning(runtime, monkeypatch, intent, 
     )
     result = intake.prepare_turn(state, runtime)
     assert result["intake_route"] == ("close" if intent == "end" else "interpret")
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"pending_offer_id": "replacement-offer"},
+        {"revision": 3},
+        {"stage": "ready"},
+        {"identity_verified": False},
+        {"account_id": "demo-002"},
+    ],
+)
+def test_acceptance_cannot_apply_to_a_changed_backend_snapshot(runtime, changed):
+    state = state_for("accept_offer", acceptance="unconditional_current_offer")
+    state["session"].update(
+        stage="awaiting_confirmation", pending_offer_id="presented-offer", revision=2
+    )
+    state["semantic_result"] = bind_understanding(
+        state,
+        TurnResult(
+            TurnUnderstanding(intent="accept_offer", acceptance="unconditional_current_offer"),
+            "classified",
+        ),
+    )
+    state["session"].update(changed)
+    result = interpretation.interpret_turn(state, runtime)
+    assert result["intent_route"] != "confirmation"
+    assert result["interpretation"]["acceptance"] == "none"
+    assert not runtime.context.repository.agreements()
+
+
+def test_acceptance_cannot_move_to_a_different_session(runtime):
+    state = state_for("accept_offer", acceptance="unconditional_current_offer")
+    state["session"].update(stage="awaiting_confirmation", pending_offer_id="presented-offer")
+    state["semantic_result"] = bind_understanding(
+        state,
+        TurnResult(
+            TurnUnderstanding(intent="accept_offer", acceptance="unconditional_current_offer"),
+            "classified",
+        ),
+    )
+    state["session_id"] = "another-session"
+    assert interpretation.interpret_turn(state, runtime)["intent_route"] != "confirmation"
+
+
+def test_session_revision_conflict_rolls_back_new_agreement(runtime):
+    from agents.collections.memory import ConflictError, event_hash
+    from agents.collections.nodes.response.node import compose_response
+
+    repo = runtime.context.repository
+    state = state_for("accept_offer", acceptance="unconditional_current_offer")
+    offer = build_offer(
+        repo.get_account("demo-001"),
+        load_policy(),
+        today=runtime.context.today,
+        first_payment_date=runtime.context.today,
+    )
+    state["session"].update(
+        stage="awaiting_confirmation", pending_offer_id=offer.offer_id, revision=0
+    )
+    state.update(draft_offer=offer.model_dump(mode="json"), input_hash="presented")
+    repo.save_turn(state, {"text": "Presented offer"})
+    state["session"] = repo.get_session(state["session_id"])
+    state.update(
+        event_id="acceptance",
+        draft_offer=None,
+        commit_requested=True,
+        input_hash=event_hash("demo-001", state["text"]),
+    )
+    with repo.connection() as db:
+        db.execute("UPDATE sessions SET revision=revision+1 WHERE id=?", (state["session_id"],))
+    with pytest.raises(ConflictError):
+        compose_response(state, runtime)
+    assert not repo.agreements()
+    assert repo.get_session(state["session_id"])["stage"] == "awaiting_confirmation"
+    assert repo.get_event(state["session_id"], "acceptance", state["input_hash"]) is None
