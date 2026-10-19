@@ -1,5 +1,6 @@
 """Bounded wording, grounding, retries, and policy isolation without paid calls."""
 
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -9,7 +10,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agents.collections import wording
 from agents.collections.agent import build_graph
-from agents.collections.interpreter import ParsedTurn
 from agents.collections.memory import SQLiteRepository
 from agents.collections.runtime import AppContext
 
@@ -123,9 +123,16 @@ def test_financial_and_transactional_replies_bypass_generation(setup, patch):
 
 def test_studio_retry_loop_is_bounded_and_next_turn_resets(setup, monkeypatch):
     ctx, _ = setup
-    from agents.collections.nodes.interpret import node
+    from agents.collections import semantic
 
-    monkeypatch.setattr(node, "parse_turn", lambda *a, **k: ParsedTurn(intent="hardship"))
+    understand = semantic.understand_turn
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda text, **kwargs: understand(
+            text, **{**kwargs, "ctx": replace(kwargs["ctx"], provider="mock")}
+        ),
+    )
     calls = []
 
     def provider(context, schema, system, payload):
