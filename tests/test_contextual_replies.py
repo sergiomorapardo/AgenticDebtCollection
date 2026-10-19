@@ -58,6 +58,7 @@ def test_grounded_reply_is_contextual_and_never_writes_agreements(setup, monkeyp
     assert set(observed[0][1]) == {
         "reference",
         "current_message",
+        "mentions_internal_marker",
         "recent_dialogue",
         "intent",
         "previous_draft_rejected",
@@ -272,6 +273,7 @@ def test_wording_payload_does_not_recycle_historical_markers_or_identifiers():
     [
         ({"intent": "negotiate", "installments": 1000}, "1,000 cuotas"),
         ({"intent": "negotiate", "amount_cop": 1, "frequency": "monthly"}, "1 COP"),
+        ({"intent": "negotiate", "amount_cop": 1}, "1 COP"),
     ],
 )
 def test_invalid_plan_is_explained_by_backend_without_wording_or_agreement(

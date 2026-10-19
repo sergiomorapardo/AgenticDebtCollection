@@ -83,6 +83,7 @@ def _dialogue_payload(state):
     return {
         "reference": state["wording_reference"],
         "current_message": redact_dialogue(state.get("text", ""), max_length=None),
+        "mentions_internal_marker": contains_internal_marker(state.get("text", "")),
         "recent_dialogue": history,
         "intent": state.get("interpretation", {}).get("intent"),
     }

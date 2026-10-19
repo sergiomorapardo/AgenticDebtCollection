@@ -26,7 +26,7 @@ def plan_dialogue(state, runtime):
         )
         too_little = (
             meaning.amount_cop is not None
-            and (meaning.amount_is_capacity or meaning.frequency == "monthly")
+            and (meaning.amount_is_capacity or meaning.frequency != "one_off")
             and meaning.amount_cop * policy.max_installments < account.balance_cop
         )
         if too_many or too_little:
