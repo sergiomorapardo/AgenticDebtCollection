@@ -9,7 +9,7 @@ from datetime import date
 from typing import Literal
 
 from anthropic import APIError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agents.collections.prompts import PromptStage, render_prompt
 
@@ -45,14 +45,43 @@ class TurnUnderstanding(BaseModel):
         "complaint",
         "clarify_process",
     ] = "unclear"
-    amount_cop: int | None = Field(default=None, gt=0, strict=True)
+    amount_cop: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description="Explicit positive COP amount, or null. For no_capacity use null, never zero.",
+    )
     amount_is_capacity: bool = False
     frequency: Literal["monthly", "one_off", "unspecified"] = "unspecified"
     payment_date: date | None = None
     installments: int | None = Field(default=None, gt=0, strict=True)
     acceptance: Literal["none", "conditional", "unconditional_current_offer"] = "none"
-    identity_token: int | None = Field(default=None, ge=0, strict=True)
-    code_token: int | None = Field(default=None, ge=0, strict=True)
+    identity_token: int | None = Field(
+        default=None,
+        ge=0,
+        strict=True,
+        description="Zero-based numeric_candidates INDEX for the identification number, not its digit count or value. <number_0> selects index 0.",
+    )
+    code_token: int | None = Field(
+        default=None,
+        ge=0,
+        strict=True,
+        description="Zero-based numeric_candidates INDEX for the verification code, not digit count or value. <number_0> selects index 0, not 4.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_zero_capacity(cls, value):
+        # Zero is a representation of the model's explicit no-capacity classification,
+        # never a payable amount. No other intent can supply a zero financial amount.
+        if (
+            isinstance(value, dict)
+            and value.get("intent") == "no_capacity"
+            and type(value.get("amount_cop")) is int
+            and value["amount_cop"] == 0
+        ):
+            return {**value, "amount_cop": None}
+        return value
 
 
 @dataclass(frozen=True)
@@ -67,6 +96,20 @@ def _redact_contacts(text: str) -> str:
     return re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", text)
 
 
+def _text_content(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(
+            item["text"]
+            for item in value
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        )
+    return ""
+
+
 def _recent_dialogue(history) -> list[dict]:
     result = []
     for item in list(history)[-4:]:
@@ -74,13 +117,15 @@ def _recent_dialogue(history) -> list[dict]:
             values = {
                 key: item[key] for key in ("user", "assistant", "role", "text") if key in item
             }
+            if "content" in item and "text" not in values:
+                values["text"] = item["content"]
         else:
             values = {"role": getattr(item, "type", ""), "text": getattr(item, "content", "")}
         result.append(
             {
-                key: re.sub(r"\d+", "[number]", _redact_contacts(value))[:600]
+                key: re.sub(r"\d+", "[number]", _redact_contacts(_text_content(value)))[:600]
                 for key, value in values.items()
-                if isinstance(value, str)
+                if isinstance(value, (str, list))
             }
         )
     return result
@@ -156,6 +201,8 @@ def _resolve(turn: TurnUnderstanding, tokens: list[str], stage: PromptStage, sta
     if turn.intent == "accept_offer" and (
         turn.acceptance != "unconditional_current_offer"
         or stage != "awaiting_confirmation"
+        or turn.frequency != "unspecified"
+        or turn.amount_is_capacity
         or any(
             value is not None for value in (turn.amount_cop, turn.payment_date, turn.installments)
         )
@@ -198,6 +245,20 @@ def _mock_turn(text, *, today, stage, ctx, tokens, context):
         "si, adelante",
     }:
         return TurnUnderstanding(intent="continue")
+    awaiting = context.get("dialogue", {}).get("awaiting")
+    if awaiting == "capacity" and normalized.strip(" .!¡") in {
+        "nada",
+        "cero",
+        "no puedo destinar nada",
+        "no me queda nada",
+        "nada, este mes no me queda ni para comer",
+    }:
+        return TurnUnderstanding(intent="no_capacity")
+    if awaiting == "frequency":
+        if normalized.strip(" .") in {"mensual", "al mes", "cada mes", "mensuales"}:
+            return TurnUnderstanding(intent="negotiate", frequency="monthly")
+        if normalized.strip(" .") in {"una vez", "un solo pago", "solo esta vez"}:
+            return TurnUnderstanding(intent="promise", frequency="one_off")
     parsed = parse_turn(text, today=today, provider="mock")
     fields = parsed.model_dump(exclude={"identity_code"})
     if fields["intent"] == "accept_offer":
@@ -222,7 +283,10 @@ def understand_turn(
         raise ValueError(f"Unsupported provider: {ctx.provider}")
     tokens = []
     current = _redact_contacts(text)
-    if stage in {"awaiting_customer", "awaiting_identity"}:
+    if (
+        stage in {"awaiting_customer", "awaiting_identity"}
+        or (context or {}).get("identity_verified") is False
+    ):
 
         def replace(match):
             tokens.append(match.group())
