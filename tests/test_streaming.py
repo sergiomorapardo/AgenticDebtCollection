@@ -1,6 +1,7 @@
 """Real LangGraph message-stream integration, replay identity and business isolation."""
 
 import sys
+from dataclasses import replace
 from datetime import datetime
 from threading import Event
 from types import SimpleNamespace
@@ -41,11 +42,17 @@ class StreamingModel(BaseChatModel):
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    from agents.collections import onboarding
+    from agents.collections import onboarding, semantic
 
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     monkeypatch.setattr(onboarding, "classify_onboarding", lambda *args: "scope")
+    understand = semantic.understand_turn
+
+    def offline_understanding(text, **kwargs):
+        return understand(text, **{**kwargs, "ctx": replace(kwargs["ctx"], provider="mock")})
+
+    monkeypatch.setattr(semantic, "understand_turn", offline_understanding)
     monkeypatch.setitem(
         sys.modules, "langchain_anthropic", SimpleNamespace(ChatAnthropic=StreamingModel)
     )
@@ -98,14 +105,6 @@ def test_tokens_arrive_before_completion_and_replay_keeps_one_message(setup, int
 
 def test_streaming_financial_reply_is_persisted_before_delivery(setup, monkeypatch):
     graph, ctx, config = setup
-    from agents.collections.interpreter import parse_turn
-    from agents.collections.nodes.interpret import node
-
-    monkeypatch.setattr(
-        node,
-        "parse_turn",
-        lambda text, **kwargs: parse_turn(text, today=ctx.today, provider="mock"),
-    )
     for index, text in enumerate(
         ["1000000001", "verificar 1111", "quiero 3 cuotas desde mañana", "confirmo"]
     ):
@@ -121,10 +120,7 @@ def test_streaming_financial_reply_is_persisted_before_delivery(setup, monkeypat
 def test_verified_conversational_stream_skips_full_text_review(setup, monkeypatch):
     graph, ctx, config = setup
     from agents.collections import wording
-    from agents.collections.interpreter import ParsedTurn
-    from agents.collections.nodes.interpret import node
 
-    monkeypatch.setattr(node, "parse_turn", lambda *a, **k: ParsedTurn(intent="hardship"))
     monkeypatch.setattr(
         wording, "_request", lambda *a: pytest.fail("No post-generation reviewer in streaming mode")
     )

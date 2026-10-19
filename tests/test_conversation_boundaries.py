@@ -3,6 +3,7 @@
 import json
 import socket
 import sys
+from dataclasses import replace
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -199,7 +200,16 @@ def test_legacy_real_exit_never_reopens(conversation, closing_text, extra):
 
 def test_boundary_replies_preserve_scope_and_simulation_disclosures(conversation, monkeypatch):
     send, ctx, _ = conversation
-    from agents.collections import wording
+    from agents.collections import semantic, wording
+
+    understand = semantic.understand_turn
+    monkeypatch.setattr(
+        semantic,
+        "understand_turn",
+        lambda text, **kwargs: understand(
+            text, **{**kwargs, "ctx": replace(kwargs["ctx"], provider="mock")}
+        ),
+    )
 
     def no_rewrite(*args):
         raise AssertionError("Do not rewrite scope or service-state messages")

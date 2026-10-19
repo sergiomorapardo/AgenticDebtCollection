@@ -387,7 +387,7 @@ def test_recall_preserves_commitments_from_earlier_sessions(chat, latest_stage):
 @pytest.mark.parametrize(
     "text", ["987654321", "ya te lo pase, era 987654321", "123", "10000000010"]
 )
-def test_unknown_identification_is_acknowledged_without_model_or_account_access(
+def test_unknown_identification_is_acknowledged_without_onboarding_or_account_access(
     chat, monkeypatch, text
 ):
     from agents.collections import chat as chat_module
@@ -429,9 +429,14 @@ def test_screenshot_unknown_id_then_code_then_correction(chat):
 def test_multiple_numbers_require_disambiguation_before_identity_binding(chat):
     send, ctx, _ = chat
     result = send("1000000001 o 123456789", "multiple")
-    assert "Veo varios números" in result["reply"]["text"]
-    assert ChatMemory(ctx.repository).binding("first")["account_id"] is None
+    assert result["reply"]["stage"] == "awaiting_customer"
+    assert "?" in result["reply"]["text"]
+    assert result["semantic_result"]["identity_candidate"] is None
+    binding = ChatMemory(ctx.repository).binding("first")
+    assert binding["account_id"] is None
+    assert binding["attempts"] == 0 and not binding["verified"]
     assert not ctx.repository.contacts_for("demo-001")
+    assert not ctx.repository.agreements()
 
 
 @pytest.mark.parametrize(
@@ -451,7 +456,9 @@ def test_payment_numbers_are_not_treated_as_identification(chat, monkeypatch, te
     send, ctx, _ = chat
     calls = []
 
-    def onboarding(text, binding, context):
+    def onboarding(text, binding, context, *, understanding=None):
+        assert understanding is not None
+        assert understanding.identity_candidate is None
         calls.append(text)
         return binding, {
             "text": "Para consultar tu cuenta, necesito tu identificación.",
