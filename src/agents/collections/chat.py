@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
+from agents.collections.memory import event_hash
 from agents.collections.nodes.intake.tools import verify_demo_code
 from agents.collections.onboarding import onboarding_reply
 from agents.collections.runtime import resolve_context
@@ -61,13 +62,18 @@ def human_input(state: ChatState, config: RunnableConfig, runtime: Runtime):
     digest = hashlib.sha256(content.encode()).hexdigest()
     event = hashlib.sha256(json.dumps([thread, message.id]).encode()).hexdigest()
     cached = memory.replay(thread, event, digest)
+    binding = memory.binding(thread)
+    if cached is None and binding["verified"] and binding["session_id"]:
+        # A business receipt may already exist if final message delivery failed.
+        cached = memory.repository.get_event(
+            binding["session_id"], event, event_hash(binding["account_id"], content.strip())
+        )
     if not isinstance(messages[-1], HumanMessage) and not (
         cached
         and isinstance(messages[-1], AIMessage)
         and messages[-1].id == (cached.get("message_id") or "reply:" + event)
     ):
         raise ValueError("Send a human message to continue the conversation.")
-    binding = memory.binding(thread)
     base = {
         "chat_thread": thread,
         "chat_event": event,
@@ -116,7 +122,7 @@ def route_chat_message(state: ChatState, runtime: Runtime):
                 "interpretation_status": "model_error",
             },
         }
-    if not binding["verified"] and understanding.turn.intent == "end":
+    if (not binding["verified"] or not binding["session_id"]) and understanding.turn.intent == "end":
         binding["closed"] = True
         response = memory.save_transition(
             state,
