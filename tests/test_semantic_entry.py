@@ -232,3 +232,53 @@ def test_studio_recovers_committed_receipt_after_chat_cache_failure(runtime, mon
     assert recovered["messages"][-1].content == receipt["text"]
     assert memory.replay("entry-receipt", event, hashlib.sha256(b"confirmo").hexdigest()) == receipt
     assert not classifier_calls and len(repository.agreements()) == 1
+
+
+def test_end_after_interrupted_verification_does_not_recover_prior_account_history(
+    runtime, monkeypatch
+):
+    from agents.collections.agent import build_graph
+
+    graph = build_graph(studio=True)
+
+    def send(text, event, thread):
+        return graph.invoke(
+            {"messages": [HumanMessage(content=text, id=event)]},
+            config={"configurable": {"thread_id": thread}},
+            context=runtime.context,
+        )
+
+    send("1000000001", "identify", "prior")
+    send("1111", "verify", "prior")
+    proposal = send("quiero 3 cuotas desde 2026-10-20", "proposal", "prior")
+    assert proposal["reply"]["stage"] == "awaiting_confirmation"
+    repository = runtime.context.repository
+    memory = ChatMemory(repository)
+    previous_binding = memory.binding("prior")
+    prior_session = repository.get_session(previous_binding["session_id"])
+    # Verification persisted, but execution stopped before selecting a business session.
+    memory.save_binding(
+        "interrupted",
+        {
+            "account_id": "demo-001",
+            "verified": True,
+            "attempts": 0,
+            "closed": False,
+            "session_id": None,
+        },
+    )
+
+    def forbidden_history(*args, **kwargs):
+        raise AssertionError("Ending this thread must not recover previous account history")
+
+    monkeypatch.setattr(ChatMemory, "customer_history", forbidden_history)
+    ended = send("terminar", "end", "interrupted")
+    assert ended["reply"]["finished"] is True
+    assert ended["reply"]["stage"] == "closed"
+    assert memory.binding("interrupted")["closed"] is True
+    assert memory.binding("interrupted")["session_id"] is None
+    assert repository.get_session(previous_binding["session_id"]) == prior_session
+    assert not repository.agreements()
+    assert "200,000" not in ended["reply"]["text"]
+    assert "2026-10-20" not in ended["reply"]["text"]
+    assert prior_session["pending_offer_id"] not in ended["reply"]["text"]
