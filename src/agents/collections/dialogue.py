@@ -1,12 +1,68 @@
 """Choose the next conversational step using persisted, bounded negotiation memory."""
 
 from agents.collections.conversation import explicit_refusal
+from agents.collections.policy import build_offer, load_policy
+from agents.collections.runtime import resolve_context
+from agents.collections.semantic_state import current_understanding
 
 
 def plan_dialogue(state, runtime):
     session = dict(state["session"])
     intent = state.get("interpretation", {}).get("intent")
     dialogue = dict(session.get("dialogue", {}))
+    understanding = current_understanding(state)
+    if understanding is not None and intent in {"options", "continue"}:
+        if not session.get("identity_verified"):
+            return {
+                "session": session,
+                "intent_route": "response",
+                "response_text": "Antes de consultar opciones de la cuenta necesito verificar tu identidad.",
+            }
+        ctx = resolve_context(runtime)
+        account = ctx.repository.get_account(session["account_id"])
+        policy = load_policy()
+        choices = []
+        for count in range(1, policy.max_installments + 1):
+            try:
+                option = build_offer(
+                    account,
+                    policy,
+                    today=ctx.today,
+                    first_payment_date=ctx.today,
+                    installments=count,
+                )
+            except ValueError:
+                continue
+            capacity = dialogue.get("monthly_capacity_cop")
+            if capacity is not None and any(
+                item.amount_cop > capacity for item in option.installments
+            ):
+                continue
+            amounts = ", ".join(f"{item.amount_cop:,} COP" for item in option.installments)
+            label = "un pago" if count == 1 else f"{count} cuotas mensuales"
+            choices.append(f"{label}: {amounts}")
+        session.update(pending_offer_id=None, draft_terms={}, stage="ready")
+        dialogue["awaiting"] = "option"
+        session["dialogue"] = dialogue
+        if not choices:
+            session.update(stage="handoff", handoff_reason="no_viable_plan")
+            dialogue["awaiting"] = None
+            text = "No encontré un plan disponible que se ajuste a tu capacidad. Dejo una solicitud de revisión, sin registrar un acuerdo."
+        else:
+            text = (
+                "Puedes pagar en "
+                + "; ".join(choices)
+                + f". El primer pago debe ser dentro de {policy.first_payment_within_days} días. "
+                "Estos importes son orientativos, no hay una oferta para aceptar: elige una opción y una fecha para revisar "
+                "el calendario completo antes de confirmar."
+            )
+        return {"session": session, "intent_route": "response", "response_text": text}
+    if understanding is not None and intent in {"scope", "history", "greeting"}:
+        return {
+            "session": session,
+            "intent_route": "response",
+            "response_text": "Puedo ayudarte a revisar tu cuenta, las opciones de pago o solicitar atención de un asesor. ¿Qué te gustaría revisar?",
+        }
     if intent in {"off_topic", "complaint", "clarify_process"}:
         responses = {
             "off_topic": "Puedo ayudarte con tu cuenta y las opciones de pago, pero no con programación u otros temas. La sesión sigue abierta. ¿Quieres retomar lo que te preocupa de la deuda?",
@@ -14,12 +70,11 @@ def plan_dialogue(state, runtime):
             "clarify_process": "La sesión sigue abierta. Podemos aclarar una duda sobre la deuda, revisar opciones de pago, dejar una solicitud de atención de un asesor o terminar si lo pides. ¿Qué necesitas aclarar?",
         }
         return {"session": session, "intent_route": "response", "response_text": responses[intent]}
-    if dialogue.get("awaiting") == "capacity" and state["text"].strip().lower() in {
-        "nada",
-        "cero",
-        "0",
-        "no puedo destinar nada",
-    }:
+    if (understanding is not None and intent == "no_capacity") or (
+        understanding is None
+        and dialogue.get("awaiting") == "capacity"
+        and state["text"].strip().lower() in {"nada", "cero", "0", "no puedo destinar nada"}
+    ):
         session.update(
             stage="handoff", pending_offer_id=None, draft_terms={}, handoff_reason="no_capacity"
         )
@@ -34,7 +89,9 @@ def plan_dialogue(state, runtime):
         return {}
     dialogue["last_intent"] = intent
     if intent == "refuse":
-        dialogue["refusals"] = dialogue.get("refusals", 0) + int(explicit_refusal(state["text"]))
+        dialogue["refusals"] = dialogue.get("refusals", 0) + int(
+            understanding is not None or explicit_refusal(state["text"])
+        )
         session.update(pending_offer_id=None, draft_terms={}, stage="ready")
         if dialogue["refusals"] >= 2:
             session["stage"] = "closed"
