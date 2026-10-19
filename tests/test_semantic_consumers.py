@@ -282,3 +282,29 @@ def test_legitimate_closed_session_never_reopens_for_continue(runtime, monkeypat
     result = intake.prepare_turn(state, runtime)
     assert result["session"]["stage"] == "closed"
     assert result["intake_route"] == "response"
+
+
+@pytest.mark.parametrize("intent", ["options", "continue"])
+@pytest.mark.parametrize("capacity", [100000, 250000])
+def test_options_apply_capacity_declared_in_same_turn(runtime, intent, capacity):
+    state = state_for(
+        intent,
+        text=f"Qué opciones hay si solo puedo pagar {capacity} al mes",
+        amount_cop=capacity,
+        amount_is_capacity=True,
+        frequency="monthly",
+    )
+    state["session"]["dialogue"] = {"monthly_capacity_cop": 600000}
+    result = dialogue.plan_dialogue(apply_interpretation(state, runtime), runtime)
+    assert result["session"]["dialogue"]["monthly_capacity_cop"] == capacity
+    assert result["session"]["pending_offer_id"] is None
+    assert "600,000 COP" not in result["response_text"]
+    assert "300,000 COP" not in result["response_text"]
+    if capacity == 100000:
+        assert result["session"]["stage"] == "handoff"
+        assert result["session"]["handoff_reason"] == "no_viable_plan"
+        assert "200,000 COP" not in result["response_text"]
+    else:
+        assert result["session"]["stage"] == "ready"
+        assert "3 cuotas mensuales" in result["response_text"]
+        assert "200,000 COP" in result["response_text"]
