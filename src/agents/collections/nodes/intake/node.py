@@ -5,7 +5,6 @@ from langgraph.runtime import Runtime
 from agents.collections.contact import check_contact
 from agents.collections.conversation import (
     recoverable_misclosure,
-    requests_end,
     terminal_response,
 )
 from agents.collections.memory import event_hash
@@ -43,6 +42,9 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
         return {**base, "replay": True, "reply": replay}
     understanding = current_understanding(state)
     session = repo.get_session(session_id)
+    valid_meaning = understanding is not None and understanding.status != "model_error"
+    if session is None and not valid_meaning and not (understanding is None and not text):
+        raise ValueError("A new message requires a valid event-bound semantic interpretation.")
     if session is None:
         repo.get_account(account_id)
         session = {
@@ -83,6 +85,11 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
     if session["account_id"] != account_id:
         raise ValueError("Una sesión no puede cambiar de cuenta.")
     base["session"] = session
+    if not valid_meaning:
+        return {
+            **base,
+            "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
+        }
     if recoverable_misclosure(session):
         from agents.collections.continuation import interpret_continuation
 
@@ -108,31 +115,13 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 recovered_from="legacy_off_topic_closure",
             )
             session["dialogue"] = {**session.get("dialogue", {}), "refusals": 0, "awaiting": None}
-            if understanding is not None and understanding.turn.intent in {"options", "continue"}:
-                return {**base, "intake_route": "interpret"}
-            return {
-                **base,
-                "response_text": "Claro, revisemos las opciones de pago. ¿Qué dificultad tienes para pagar en este momento?",
-            }
+            return {**base, "intake_route": "interpret"}
     if session["stage"] in {"closed", "handoff", "agreed"}:
         return {
             **base,
-            "response_text": terminal_response(
-                session,
-                text,
-                **({"intent": understanding.turn.intent} if understanding is not None else {}),
-            ),
+            "response_text": terminal_response(session, text, intent=understanding.turn.intent),
         }
-    if understanding is not None and understanding.status == "model_error":
-        return {
-            **base,
-            "response_text": "No pude interpretar tu respuesta. No registré cambios; puedes reintentar.",
-        }
-    if (
-        understanding.turn.intent in {"end", "decline"}
-        if understanding is not None
-        else requests_end(text)
-    ):
+    if understanding.turn.intent in {"end", "decline"}:
         return {**base, "intake_route": "close"}
     if session["turns"] >= 20:
         session["stage"] = "handoff"
@@ -141,16 +130,13 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "response_text": "No hemos podido resolver la gestión en esta conversación. Dejo registrada una solicitud de revisión.",
         }
     if not session["identity_verified"]:
-        if understanding is not None:
-            candidate = understanding.verification_candidate
-            if understanding.turn.intent != "verification_code" or candidate is None:
-                return {
-                    **base,
-                    "response_text": "Antes de consultar la cuenta necesito verificar tu identidad. Comparte el código de verificación o dime si prefieres terminar.",
-                }
-            verification_text = f"verificar {candidate}"
-        else:
-            verification_text = text
+        candidate = understanding.verification_candidate
+        if understanding.turn.intent != "verification_code" or candidate is None:
+            return {
+                **base,
+                "response_text": "Antes de consultar la cuenta necesito verificar tu identidad. Comparte el código de verificación o dime si prefieres terminar.",
+            }
+        verification_text = f"verificar {candidate}"
         if verify_demo_code(account_id, verification_text):
             session["identity_verified"] = True
             session["stage"] = "ready"
