@@ -80,13 +80,13 @@ def recoverable_misclosure(session):
 
 def terminal_response(session, text, *, intent=None):
     if recoverable_misclosure(session):
-        if intent == "end" or (intent is None and requests_end(text)):
+        if intent == "end":
             return "Entendido. Mantengo cerrada esta conversación; no retomaré la negociación."
         return (
             "Lamento la atención anterior. Puedo ayudarte a revisar las opciones de pago. "
             "¿Quieres que sigamos revisando las opciones de pago?"
         )
-    complaint = intent == "complaint" or (intent is None and social_intent(text) == "complaint")
+    complaint = intent == "complaint"
     prefix = "Lamento la mala experiencia. " if complaint else ""
     if not session.get("identity_verified"):
         return (
