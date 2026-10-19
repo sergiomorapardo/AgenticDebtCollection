@@ -20,6 +20,17 @@ PROMPT = render_prompt("continuation")
 
 
 def interpret_continuation(state, session, ctx):
+    from agents.collections.semantic_state import current_understanding
+
+    understanding = current_understanding(state)
+    if understanding is not None:
+        intent = {
+            "continue": "resume",
+            "options": "resume",
+            "end": "stop",
+            "decline": "decline",
+        }.get(understanding.turn.intent, "unclear")
+        return intent, understanding.status
     text = state["text"]
     if requests_end(text):
         return "stop", "deterministic"
