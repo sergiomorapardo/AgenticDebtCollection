@@ -234,6 +234,7 @@ class ExecutionTrace:
         self.graph_id = "collections_agent"
         self.version = "loaded"
         self.graph_complete = False
+        self.first_node_step = None
         self.session_id = session_id
         self.turn = 0
         self.events = []
@@ -245,11 +246,14 @@ class ExecutionTrace:
             self.turn += 1
             self.events = []
             self.graph_complete = False
+            self.first_node_step = None
             self.revision += 1
 
     def start(self, name, *, event_id=None, kind="node", step=None):
         with self._lock:
             event_id = event_id or uuid4().hex
+            if kind == "node" and step is not None and self.first_node_step is None:
+                self.first_node_step = step
             self.events.append(
                 {
                     "id": event_id,
@@ -320,7 +324,7 @@ class ExecutionTrace:
                 # Ambiguous conditional fan-in is not asserted as an executed transition.
                 if not edge["conditional"] or len(candidates) == 1:
                     paths.add((edge["source"], edge["target"]))
-            if target["step"] == min(event["step"] for event in nodes if event["step"] is not None):
+            if target["step"] == self.first_node_step:
                 for edge in incoming:
                     if edge["source"] == "__start__":
                         paths.add((edge["source"], edge["target"]))
@@ -369,9 +373,13 @@ class VoiceSession:
         self.graph_registry = graph_registry
         self._released = False
         self.failed = False
+        self.requests_end = requests_end
         if graph_registry:
             self.graph, graph_id, version = graph_registry.acquire()
             try:
+                self.requests_end = importlib.import_module(
+                    "agents.collections.conversation"
+                ).requests_end
                 runtime = importlib.import_module("agents.collections.runtime")
                 memory = importlib.import_module("agents.collections.memory")
                 self.context = runtime.AppContext(
@@ -445,7 +453,7 @@ class VoiceSession:
         pending = self.reply and self.reply["stage"] == "awaiting_confirmation"
         if (
             pending
-            and not requests_end(text)
+            and not self.requests_end(text)
             and (not self.audio or self.played_audio != self.audio)
         ):
             raise VoiceInputError(
@@ -470,6 +478,7 @@ class VoiceSession:
             started = perf_counter()
             try:
                 with self.context.repository.connection():
+                    result = None
                     for mode, chunk in self.graph.stream(
                         {"messages": [HumanMessage(content=text, id=uuid4().hex)]},
                         config={"configurable": {"thread_id": self.thread_id}},
@@ -479,14 +488,22 @@ class VoiceSession:
                         if mode == "debug":
                             if chunk["type"] in {"task", "task_result"}:
                                 self.trace.task(chunk["payload"], chunk["step"])
-                        else:
+                        elif mode == "values":
                             result = chunk
+                    reply = result.get("reply") if isinstance(result, dict) else None
+                    if (
+                        not isinstance(reply, dict)
+                        or not isinstance(reply.get("text"), str)
+                        or not isinstance(reply.get("stage"), str)
+                        or not isinstance(reply.get("finished"), bool)
+                    ):
+                        raise TypeError("Graph returned an invalid voice reply")
             except Exception:
                 self.failed = True
                 self.trace.fail_running()
                 raise
             self.trace.complete()
-            self.reply = result["reply"]
+            self.reply = reply
             self.latencies["agent_seconds"] = round(perf_counter() - started, 3)
             self.history.extend(
                 [

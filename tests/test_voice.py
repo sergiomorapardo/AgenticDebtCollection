@@ -738,3 +738,134 @@ def test_graph_failure_rolls_back_agreement_and_blocks_repeated_turn(session, mo
     with pytest.raises(ValueError, match="Finaliza"):
         session.send("confirmo")
     assert not session.context.repository.agreements()
+
+
+@pytest.mark.parametrize("failure", ["publish", "snapshot"])
+def test_snapshot_failure_clears_busy_and_caches_uncertain_outcome(
+    voice_api, session, monkeypatch, failure
+):
+    from uuid import uuid4
+
+    state = finish_playback(voice_api, api_post(voice_api, "start").json())
+    original = VoiceSession.details
+    calls = 0
+
+    def broken_details(self):
+        nonlocal calls
+        calls += 1
+        if (failure == "publish" and calls == 3) or (failure == "snapshot" and calls >= 2):
+            raise RuntimeError("private-publication-error")
+        return original(self)
+
+    key = uuid4().hex
+    with monkeypatch.context() as patch:
+        patch.setattr(VoiceSession, "details", broken_details)
+        response = api_post(voice_api, "text", state=state, payload={"text": "123456789"}, key=key)
+        assert response.status_code == 500
+        assert "private-publication-error" not in response.text
+        count = len(session.speech.calls)
+        assert (
+            api_post(voice_api, "text", state=state, payload={"text": "123456789"}, key=key).json()
+            == response.json()
+        )
+        assert len(session.speech.calls) == count
+        current = voice_api.get("/api/session").json()
+        assert not current["busy"] and current["failed"] and not current["ready"]
+    assert api_post(voice_api, "end", state=current).json()["finished"]
+
+
+@pytest.mark.parametrize("output", [None, {}, {"reply": {"text": "missing stage"}}])
+def test_invalid_stream_reply_rolls_back_and_quarantines_the_call(session, monkeypatch, output):
+    offer(session)
+    session.acknowledge_playback(session.audio)
+    original = session.graph.stream
+    history = list(session.history)
+    speech_calls = len(session.speech.calls)
+
+    def invalid_stream(*args, **kwargs):
+        for mode, chunk in original(*args, **kwargs):
+            if mode == "debug":
+                yield mode, chunk
+        if output is not None:
+            yield "values", output
+
+    monkeypatch.setattr(session.graph, "stream", invalid_stream)
+    with pytest.raises(TypeError, match="invalid voice reply"):
+        session.send("confirmo")
+    assert session.failed and not session.trace.snapshot()["graph_complete"]
+    assert not session.context.repository.agreements()
+    assert session.history == history and len(session.speech.calls) == speech_calls
+    with pytest.raises(ValueError, match="Finaliza"):
+        session.send("confirmo")
+
+
+def test_trace_eviction_does_not_invent_a_new_start_step(session):
+    trace = session.trace
+    trace.begin()
+    entry = next(
+        edge["target"] for edge in trace.topology["edges"] if edge["source"] == "__start__"
+    )
+    for step in range(201):
+        event_id = trace.start(entry, step=step)
+        trace.finish(event_id)
+    result = trace.snapshot()
+    assert len(result["events"]) == 200
+    assert ["__start__", entry] not in result["transitions"]
+    trace.begin()
+    trace.start(entry, step=300)
+    assert ["__start__", entry] in trace.snapshot()["transitions"]
+
+
+def test_idle_trace_uses_refreshed_catalog(session, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from collections_lab.channels.voice_app import create_app
+
+    registry, module, _, template = registry_fixture(tmp_path, monkeypatch)
+    app = create_app(
+        session.speech, data_dir=tmp_path / "api", now=session.context.now, graph_registry=registry
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        client.get("/")
+        first = client.get("/api/trace").json()
+        assert "alpha" in first["topology"]["nodes"]
+        module.write_text(template.format(node="bravo"))
+        second = client.get("/api/trace").json()
+        assert "bravo" in second["topology"]["nodes"]
+        assert second["graph_version"] != first["graph_version"]
+        assert not second["events"] and not second["session_id"]
+
+
+def test_registry_call_captures_current_end_intent_helper(session, tmp_path, monkeypatch):
+    from agents.collections import conversation
+
+    class Registry:
+        def acquire(self):
+            return session.graph, "collections_agent", "test-version"
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(conversation, "requests_end", lambda text: text == "custom hangup")
+    call = VoiceSession(
+        session.context, session.speech, tmp_path / "reload", graph_registry=Registry()
+    )
+    call.reply = {"stage": "awaiting_confirmation", "finished": False, "text": "Offer"}
+    call.check_turn("custom hangup")
+    monkeypatch.setattr(conversation, "requests_end", lambda text: False)
+    call.check_turn("custom hangup")  # Keep this call's loaded helper for its entire lease.
+    with pytest.raises(ValueError, match="Espera"):
+        call.check_turn("other")
+
+
+def test_failed_initial_publication_keeps_call_reachable_for_hangup(voice_api, monkeypatch):
+    def broken_details(self):
+        raise RuntimeError("publication failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(VoiceSession, "details", broken_details)
+        response = api_post(voice_api, "start")
+        assert response.status_code == 500
+        current = voice_api.get("/api/session").json()
+        assert current["session_id"] and current["failed"] and not current["busy"]
+    assert api_post(voice_api, "end", state=current).json()["finished"]

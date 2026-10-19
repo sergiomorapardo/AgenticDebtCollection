@@ -206,7 +206,20 @@ def create_app(
         entry = browser(request)
         # Intentionally independent of entry.lock: a long node must remain observable.
         current_trace = entry.trace
-        return current_trace.snapshot() if current_trace else empty_trace
+        if current_trace:
+            return current_trace.snapshot()
+        if graph_registry:
+            catalog = graph_registry.catalog()
+            graph = next(
+                (item for item in catalog["graphs"] if item["id"] == "collections_agent"), None
+            )
+            if graph:
+                return {
+                    **empty_trace,
+                    "topology": graph["topology"],
+                    "graph_version": catalog["version"],
+                }
+        return empty_trace
 
     @app.get("/api/audio/{audio_id}")
     def audio(audio_id: str, request: Request):
@@ -230,91 +243,125 @@ def create_app(
                 entry.busy = True
             try:
                 try:
-                    payload = {} if action == "recording" else json.loads(raw or b"{}")
-                except json.JSONDecodeError:
-                    raise VoiceInputError("Mensaje JSON inválido.") from None
-                if not isinstance(payload, dict):
-                    raise VoiceInputError("Mensaje inválido.")
-                call = entry.call
-                if action == "start":
-                    if call and (not call.reply or not call.reply["finished"]):
-                        raise VoiceInputError("Ya hay una llamada activa.")
-                    directory = Path(data_dir) / uuid4().hex
-                    context = AppContext(
-                        SQLiteRepository(directory / "conversation.sqlite3"), now, provider, model
-                    )
-                    call = VoiceSession(context, speech, directory, graph_registry=graph_registry)
-                    entry.trace = call.trace
-                    entry.started, entry.ended = monotonic(), None
-                    entry.call = call
-                    publish(entry)
-                    call.send("Hola")
-                else:
-                    if call is None or call.thread_id != call_id:
-                        raise VoiceInputError("La llamada cambió. Recarga la página.")
-                    if action in {"text", "recording", "retry"} and call.failed:
-                        raise VoiceInputError(
-                            "El turno falló. Finaliza esta llamada antes de continuar."
+                    try:
+                        payload = {} if action == "recording" else json.loads(raw or b"{}")
+                    except json.JSONDecodeError:
+                        raise VoiceInputError("Mensaje JSON inválido.") from None
+                    if not isinstance(payload, dict):
+                        raise VoiceInputError("Mensaje inválido.")
+                    call = entry.call
+                    if action == "start":
+                        if call and (not call.reply or not call.reply["finished"]):
+                            raise VoiceInputError("Ya hay una llamada activa.")
+                        directory = Path(data_dir) / uuid4().hex
+                        context = AppContext(
+                            SQLiteRepository(directory / "conversation.sqlite3"),
+                            now,
+                            provider,
+                            model,
                         )
-                    if action in {"text", "recording"} and not snapshot(entry)["ready"]:
-                        raise VoiceInputError("Espera a que termine el mensaje del agente.")
-                    if action == "text":
-                        text = payload.get("text")
-                        if not isinstance(text, str):
-                            raise VoiceInputError("Escribe una respuesta.")
-                        call.send(text)
-                    elif action == "recording":
-                        path = call.directory / ("input-" + uuid4().hex + AUDIO_TYPES[content_type])
-                        try:
-                            path.write_bytes(raw)
-                            call.respond_to_audio(path)
-                        finally:
-                            path.unlink(missing_ok=True)
-                    elif action == "playback":
-                        audio_id = payload.get("audio_id")
-                        if not isinstance(audio_id, str) or audio_id != snapshot(entry)["audio_id"]:
+                        call = VoiceSession(
+                            context, speech, directory, graph_registry=graph_registry
+                        )
+                        entry.trace = call.trace
+                        entry.started, entry.ended = monotonic(), None
+                        entry.call = call
+                        publish(entry)
+                        call.send("Hola")
+                    else:
+                        if call is None or call.thread_id != call_id:
+                            raise VoiceInputError("La llamada cambió. Recarga la página.")
+                        if action in {"text", "recording", "retry"} and call.failed:
                             raise VoiceInputError(
-                                "Ese audio ya no corresponde a la respuesta actual."
+                                "El turno falló. Finaliza esta llamada antes de continuar."
                             )
-                        call.acknowledge_playback(audio_id)
-                    elif action == "retry":
-                        call.retry_audio()
-                    elif action == "end" and (not call.reply or not call.reply["finished"]):
-                        if call.failed or call.reply is None:
-                            call.reply = {
-                                "finished": True,
-                                "stage": "closed",
-                                "text": "Llamada finalizada.",
-                            }
-                            call.audio = None
-                        else:
-                            call.send("terminar", speak=False)
-                if (
-                    entry.call
-                    and entry.call.reply
-                    and entry.call.reply["finished"]
-                    and entry.ended is None
-                ):
-                    entry.ended = monotonic()
-                result = snapshot(entry)
-            except (VoiceInputError, SpeechError) as error:
-                result, status = {"detail": str(error), "state": snapshot(entry)}, 400
-            except Exception:  # noqa: BLE001 - cache uncertain outcomes at the API boundary
-                # Preserve the call and cache uncertain outcomes for the same request ID.
+                        if action in {"text", "recording"} and not snapshot(entry)["ready"]:
+                            raise VoiceInputError("Espera a que termine el mensaje del agente.")
+                        if action == "text":
+                            text = payload.get("text")
+                            if not isinstance(text, str):
+                                raise VoiceInputError("Escribe una respuesta.")
+                            call.send(text)
+                        elif action == "recording":
+                            path = call.directory / (
+                                "input-" + uuid4().hex + AUDIO_TYPES[content_type]
+                            )
+                            try:
+                                path.write_bytes(raw)
+                                call.respond_to_audio(path)
+                            finally:
+                                path.unlink(missing_ok=True)
+                        elif action == "playback":
+                            audio_id = payload.get("audio_id")
+                            if (
+                                not isinstance(audio_id, str)
+                                or audio_id != snapshot(entry)["audio_id"]
+                            ):
+                                raise VoiceInputError(
+                                    "Ese audio ya no corresponde a la respuesta actual."
+                                )
+                            call.acknowledge_playback(audio_id)
+                        elif action == "retry":
+                            call.retry_audio()
+                        elif action == "end" and (not call.reply or not call.reply["finished"]):
+                            if call.failed or call.reply is None:
+                                call.reply = {
+                                    "finished": True,
+                                    "stage": "closed",
+                                    "text": "Llamada finalizada.",
+                                }
+                                call.audio = None
+                            else:
+                                call.send("terminar", speak=False)
+                    if (
+                        entry.call
+                        and entry.call.reply
+                        and entry.call.reply["finished"]
+                        and entry.ended is None
+                    ):
+                        entry.ended = monotonic()
+                    result = snapshot(entry)
+                except (VoiceInputError, SpeechError) as error:
+                    result, status = {"detail": str(error), "state": snapshot(entry)}, 400
+                except Exception:  # noqa: BLE001 - cache uncertain outcomes at the API boundary
+                    # Preserve the call and cache uncertain outcomes for the same request ID.
+                    result, status = (
+                        {
+                            "detail": "No se pudo completar el turno. Revisa el estado de la llamada.",
+                            "state": snapshot(entry),
+                        },
+                        500,
+                    )
+                if entry.call and entry.call.reply and entry.call.reply["finished"]:
+                    entry.call.release_graph()
+                    if entry.ended is None:
+                        entry.ended = monotonic()
+                publish(entry)
+            except Exception:  # noqa: BLE001 - snapshot/publication failures must remain recoverable
+                if entry.call:
+                    entry.call.failed = True
+                with entry.read_lock:
+                    entry.published.update(failed=True, ready=False)
+                    if entry.call:
+                        entry.published.update(
+                            session_id=entry.call.thread_id,
+                            history=list(entry.call.history),
+                            finished=False,
+                            elapsed_seconds=max(0, monotonic() - entry.started),
+                        )
+                        entry.published_at = monotonic()
                 result, status = (
                     {
-                        "detail": "No se pudo completar el turno. Revisa el estado de la llamada.",
-                        "state": snapshot(entry),
+                        "detail": "No se pudo completar el turno. Finaliza esta llamada.",
+                        "state": published(entry),
                     },
                     500,
                 )
-            if entry.call and entry.call.reply and entry.call.reply["finished"]:
-                entry.call.release_graph()
-                if entry.ended is None:
-                    entry.ended = monotonic()
-            publish(entry)
-            with entry.read_lock:
-                entry.busy = False
+            finally:
+                with entry.read_lock:
+                    entry.busy = False
+            if "state" in result:
+                result["state"]["busy"] = False
             entry.responses[request_id] = (digest, result, status)
             if len(entry.responses) > 128:
                 entry.responses.popitem(last=False)

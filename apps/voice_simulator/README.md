@@ -141,6 +141,16 @@ the last valid catalog and reports a sanitized warning. The next corrected sourc
 retried. Imports compile source directly without modifying bytecode caches. Graph entry modules
 must only define/compile graphs, as in Studio; never put provider calls at module import time.
 
+Calls keep their lease even between turns so a reload cannot mix module versions within a
+conversation. Close calls with Hang up before expecting a pending edit to load. Closing a tab
+without hanging up retains its lease until the session expires after one hour of inactivity;
+other active sessions can also defer reload. Shorter abandoned-call expiry remains a follow-up.
+Reloading merely because no turn is busy would violate this per-call version guarantee.
+
+The fingerprint excludes JSON fixtures and policy data; their call-time reads do not trigger a
+pending-source notice. Catalog polls currently hash local source while holding the registry lock.
+Incremental change detection and background catalog preparation are performance follow-ups.
+
 This watches the current checkout, not GitHub: integrating/pulling other PRs remains explicit.
 Once their source is present here, graph changes need no manual diagram updates or server restart.
 Changes to the server itself, dependencies, or environment still require restart. Without a local
