@@ -512,6 +512,10 @@ class VoiceSession:
                         or not isinstance(reply.get("finished"), bool)
                     ):
                         raise TypeError("Graph returned an invalid voice reply")
+                    if reply["finished"] and reply.get("continuation_available") is True:
+                        # Call lifetime is not business lifetime: keep listening for the
+                        # customer's own continuation request. Nothing is reopened here.
+                        reply = {**reply, "finished": False}
                     self.trace.complete()
                 self.reply = reply
                 self.latencies["agent_seconds"] = round(perf_counter() - started, 3)

@@ -68,6 +68,7 @@ def create_app(
     model="claude-haiku-4-5-20251001",
     now,
     graph_registry=None,
+    database: Path | None = None,
 ):
     app = FastAPI(
         title="Simulador de voz · Cobranza", docs_url=None, redoc_url=None, openapi_url=None
@@ -75,6 +76,9 @@ def create_app(
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
     browsers = {}
     registry_lock = RLock()
+    # Business records outlive calls so a re-verified customer can resume them; audio,
+    # playback evidence, call IDs and browser sessions stay per call.
+    repository = SQLiteRepository(database or Path(data_dir) / "business.sqlite3")
     empty_trace = ExecutionTrace(build_graph(studio=True), None).snapshot()
 
     def cookie_name(request):
@@ -254,12 +258,7 @@ def create_app(
                         if call and (not call.reply or not call.reply["finished"]):
                             raise VoiceInputError("Ya hay una llamada activa.")
                         directory = Path(data_dir) / uuid4().hex
-                        context = AppContext(
-                            SQLiteRepository(directory / "conversation.sqlite3"),
-                            now,
-                            provider,
-                            model,
-                        )
+                        context = AppContext(repository, now, provider, model)
                         call = VoiceSession(
                             context, speech, directory, graph_registry=graph_registry
                         )
@@ -403,6 +402,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--data-dir", type=Path, default=Path(".local/voice"))
+    parser.add_argument(
+        "--database",
+        type=Path,
+        help="Business SQLite shared by all calls (default: <data-dir>/business.sqlite3)",
+    )
     parser.add_argument("--provider", choices=["mock", "anthropic"])
     args = parser.parse_args()
     settings = load_settings(Path.cwd() / ".env")
@@ -416,6 +420,7 @@ def main():
         model=settings.anthropic_model,
         now=datetime.fromisoformat(settings.demo_now),
         graph_registry=GraphRegistry(Path.cwd()) if Path("langgraph.json").exists() else None,
+        database=args.database,
     )
     uvicorn.run(app, host="127.0.0.1", port=args.port)
 
