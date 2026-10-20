@@ -242,7 +242,9 @@ flowchart TD
 | Recorded commitment or human review | The outcome is reported and the call ends, as in the original call |
 
 A `finished` reply ends the call unless the workflow marks it `continuation_available`;
-a later stop or decline ends it normally. Playback acknowledgements never carry over.
+a later stop or decline ends it normally. In the voice API, `finished` reports the call,
+while `details.stage` reports the business outcome. An open call ends on hangup or when its
+browser session expires after one hour of inactivity, like any other call. Playback acknowledgements never carry over.
 Agreements stay unique per business session, so retries, reconnects, repeated requests and
 overlapping calls for the same customer cannot create a second agreement. Business turns
 from different calls run one at a time on the shared SQLite file, so a slow model turn
