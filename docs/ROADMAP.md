@@ -48,12 +48,12 @@ another reply. Offer confirmation is also gated on the server; events for older 
 cannot unlock a new offer. An ended event does not prove audibility or uninterrupted
 listening. Stronger interruption-aware playback tracking remains a later iteration.
 
-### TODO: resume a business session across voice calls
+### Resume a business session across voice calls
 
-- [ ] Let a verified customer explicitly resume the same business session in a new
-  voice call, preserving history, customer isolation, and existing agreements without
-  duplicate writes. Re-verify identity and follow the shared workflow's continuation rules.
-  Currently, each voice call uses isolated storage and terminal replies end the call.
+**Implemented locally:** calls share one business SQLite file while audio, traces, call IDs
+and browser sessions stay per call. Each call re-verifies identity; the shared workflow's
+continuation rules decide what resumes. See
+[resume a business session](../apps/voice_simulator/README.md#resume-a-business-session-in-a-new-call).
 
 ### TODO: streaming voice
 
