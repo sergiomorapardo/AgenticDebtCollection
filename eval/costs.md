@@ -16,9 +16,14 @@ uv run python eval/run.py                      # offline baseline -> eval/result
 uv run python eval/run.py --provider anthropic --confirm-spend --max-usd 1.00
 ```
 
-The paid run refuses to start without `--confirm-spend` and stops before the next scenario
-once `--max-usd` is reached, so it can overshoot by at most one scenario. Prices: Haiku 4.5
-at USD 1 / 5 per million input/output tokens; cache writes 1.25× and reads 0.1× input.
+The paid run refuses to start without `--confirm-spend`, refuses an unpriced model, and
+checks the budget after every turn. `--max-usd` is a soft cap: the turn in flight can
+overshoot it slightly. The report is rewritten after every scenario, so spend is recorded
+even if a later scenario fails. Prices: Haiku 4.5 at USD 1 / 5 per million input/output
+tokens; cache writes use the 5-minute TTL price (1.25× input) and reads 0.1× input.
+
+Scenarios pass or fail on business outcomes only. `wording_status` and interpretation
+`model_error` counts are reported for analysis but do not fail a scenario.
 
 | Run | Passed | Tokens in/out | USD | Notes |
 | --- | --- | --- | --- | --- |

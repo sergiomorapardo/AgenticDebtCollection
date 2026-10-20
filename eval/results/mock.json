@@ -21,8 +21,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.08
+      "first_token_ms_median": null
     },
     {
       "id": "three-installments",
@@ -37,8 +36,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.02
+      "first_token_ms_median": null
     },
     {
       "id": "outside-policy",
@@ -53,8 +51,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.01
+      "first_token_ms_median": null
     },
     {
       "id": "reported-payment",
@@ -69,8 +66,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.01
+      "first_token_ms_median": null
     },
     {
       "id": "disputed-debt",
@@ -85,8 +81,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.02
+      "first_token_ms_median": null
     },
     {
       "id": "unverified-identity",
@@ -101,8 +96,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.01
+      "first_token_ms_median": null
     },
     {
       "id": "unclear-acceptance",
@@ -117,8 +111,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.02
+      "first_token_ms_median": null
     },
     {
       "id": "duplicate-confirmation",
@@ -133,8 +126,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.02
+      "first_token_ms_median": null
     },
     {
       "id": "changed-balance",
@@ -149,8 +141,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.02
+      "first_token_ms_median": null
     },
     {
       "id": "audio-interruption",
@@ -170,8 +161,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
-      "first_token_ms_median": null,
-      "seconds": 0.01
+      "first_token_ms_median": null
     }
   ]
 }
