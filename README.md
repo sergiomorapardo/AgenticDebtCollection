@@ -3,8 +3,14 @@
 A conversational debt collection agent that negotiates payment plans and records commitments.
 Built with LangGraph for a fictional Colombian fintech.
 
-**Available now:** local text conversations through the CLI or LangGraph Studio, with SQLite memory.
-Voice simulation and AWS deployment are [planned stages](docs/ROADMAP.md).
+**Available now:** local text conversations through the CLI or LangGraph Studio, with SQLite memory,
+and a [browser voice simulator](apps/voice_simulator/README.md) with an optional graph viewer.
+AWS deployment and real telephony are [planned stages](docs/ROADMAP.md).
+
+![Local voice simulator with the call interface on the left and the LangGraph viewer on the right](docs/images/voice-visualizer.jpg)
+
+*The local simulator before a call, with the optional technical viewer open. Select
+“Ver flujo técnico” to inspect the graph; during a call, it also shows node execution and timing.*
 
 ```mermaid
 flowchart LR
