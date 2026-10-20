@@ -6,6 +6,8 @@ import unicodedata
 LEGACY_CLOSE = (
     "Finalizo la simulación. No se ha registrado un nuevo compromiso ni realizado un pago."
 )
+# Closures that only stop collection; the customer may later ask to review options again.
+RESUMABLE_CLOSE_REASONS = frozenset({"customer_request", "repeated_refusal"})
 
 
 def normalize_text(text):
@@ -76,6 +78,25 @@ def recoverable_misclosure(session):
                 for later in history[index + 1 :]
             )
     return False
+
+
+def continuation_available(session, intent=None):
+    """Whether a channel should keep listening for a customer-led continuation request.
+
+    This reopens nothing: intake still requires the customer's newly understood request.
+    Agreements, handoffs, failed verification and other closures stay terminal.
+    """
+    if intent in {"end", "decline", "refuse"}:
+        return False
+    return (
+        session["stage"] == "closed"
+        and bool(session.get("identity_verified"))
+        and not session.get("agreement_id")
+        and (
+            session.get("close_reason") in RESUMABLE_CLOSE_REASONS
+            or recoverable_misclosure(session)
+        )
+    )
 
 
 def terminal_response(session, text, *, intent=None):
