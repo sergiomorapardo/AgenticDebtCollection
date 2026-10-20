@@ -10,3 +10,8 @@ The visual documentation adapts teaching patterns from these repositories:
 
 The collection code, synthetic fixtures, and diagrams were created for this project.
 No credentials or customer data were copied.
+
+## License compatibility
+
+This repository is released under the [MIT License](LICENSE). AdvancedGenAI is MIT-licensed
+by the same author.
