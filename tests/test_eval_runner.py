@@ -127,7 +127,9 @@ def test_budget_stops_after_the_scenario_that_reaches_it(runner, monkeypatch):
         scenarios(), provider="mock", model=None, max_usd=1.0, on_progress=progress.append
     )
     assert [budget for _, budget in ran] == [1.0, pytest.approx(0.4)]
-    assert sum(r["status"] == "not_run" for r in results) == len(scenarios()) - 3
+    runnable = [s for s in scenarios() if not s.get("skip")]
+    assert [r["id"] for r in results if r["status"] == "pass"] == [s["id"] for s in runnable[:2]]
+    assert sum(r["status"] == "not_run" for r in results) == len(runnable) - 2
     assert len(progress) == len(scenarios())
 
 
@@ -150,3 +152,39 @@ def test_paid_run_requires_confirmation_and_a_key(runner, monkeypatch, tmp_path,
     with pytest.raises(SystemExit, match=message):
         runner.main()
     assert not (tmp_path / "x.json").exists()
+
+
+def test_unpriced_usage_stops_the_scenario_and_keeps_raw_usage(runner, monkeypatch):
+    unknown = {"unknown-model": {"input_tokens": 5, "output_tokens": 1, "total_tokens": 6}}
+
+    class Usage:
+        usage_metadata = unknown
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("langchain_core.callbacks.get_usage_metadata_callback", Usage)
+    full_payment = next(s for s in scenarios() if s["id"] == "full-payment")
+    result = runner.run_scenario(full_payment, provider="mock", model=None, budget_usd=1.0)
+    assert result["failures"] == ["stopped after turn 1: unpriced model"]
+    assert result["usd"] is None and result["usage_by_model"] == unknown
+    assert result["turns"] == 1
+
+
+@pytest.mark.parametrize("keep_anthropic", [False, True])
+def test_external_services_are_disabled_before_a_run(runner, monkeypatch, keep_anthropic):
+    for key in (
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_PROJECT",
+        "ELEVENLABS_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.setenv(key, "test-value")
+    runner.disable_external_services(keep_anthropic=keep_anthropic)
+    remaining = {k for k in os.environ if k.startswith(("LANGCHAIN_", "LANGSMITH_", "ELEVENLABS_"))}
+    assert remaining == {"LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2"}
+    assert os.environ["LANGSMITH_TRACING"] == os.environ["LANGCHAIN_TRACING_V2"] == "false"
+    assert ("ANTHROPIC_API_KEY" in os.environ) is keep_anthropic

@@ -158,11 +158,24 @@ def run_scenario(scenario, *, provider, model, budget_usd=float("inf")):
             except Exception as error:  # noqa: BLE001 - record and continue the evaluation
                 errors.append(f"turn {index + 1}: {type(error).__name__}")
                 replies.append({})
-            if usd(usage.usage_metadata) >= budget_usd:
-                errors.append(f"stopped after turn {index + 1}: budget reached")
+            try:
+                spent = usd(usage.usage_metadata)
+            except ValueError:
+                # A response reported an unpriced model: stop instead of losing the record.
+                stopped = f"stopped after turn {index + 1}: unpriced model"
                 break
-        failures = errors + check(scenario["id"], replies, repository)
+            if spent >= budget_usd:
+                stopped = f"stopped after turn {index + 1}: budget reached"
+                break
+        else:
+            stopped = None
+        # A stopped scenario reports why instead of expectations for turns never sent.
+        failures = errors + ([stopped] if stopped else check(scenario["id"], replies, repository))
         usage_by_model = dict(usage.usage_metadata)
+    try:
+        cost = round(usd(usage_by_model), 6)
+    except ValueError:
+        cost = None
     first_tokens = [r["first_token_ms"] for r in replies if r.get("first_token_ms") is not None]
     result = {
         "id": scenario["id"],
@@ -177,7 +190,8 @@ def run_scenario(scenario, *, provider, model, budget_usd=float("inf")):
         ),
         "input_tokens": sum(u.get("input_tokens", 0) for u in usage_by_model.values()),
         "output_tokens": sum(u.get("output_tokens", 0) for u in usage_by_model.values()),
-        "usd": round(usd(usage_by_model), 6),
+        "usd": cost,
+        "usage_by_model": usage_by_model,
         "first_token_ms_median": statistics.median(first_tokens) if first_tokens else None,
     }
     if provider != "mock":
@@ -199,7 +213,10 @@ def evaluate(scenarios, *, provider, model, max_usd, on_progress=None):
             results.append(
                 run_scenario(scenario, provider=provider, model=model, budget_usd=max_usd - spent)
             )
-            spent += results[-1]["usd"]
+            if results[-1]["usd"] is None:
+                spent = max_usd  # Unknown cost: stop spending on later scenarios.
+            else:
+                spent += results[-1]["usd"]
         if on_progress:
             on_progress(summarize(results, provider=provider, model=model))
     return summarize(results, provider=provider, model=model)
@@ -215,7 +232,7 @@ def summarize(results, *, provider, model):
         "evaluated": len(ran),
         "input_tokens": sum(r["input_tokens"] for r in ran),
         "output_tokens": sum(r["output_tokens"] for r in ran),
-        "usd": round(sum(r["usd"] for r in ran), 6),
+        "usd": round(sum(r["usd"] or 0 for r in ran), 6),
         "scenarios": results,
     }
 
@@ -233,7 +250,8 @@ def markdown(report):
         result = r["status"] + (f" ({'; '.join(r['failures'])})" if r["failures"] else "")
         rows.append(
             f"| `{r['id']}` | {result} | {r['turns']} | {wording} | "
-            f"{r['input_tokens']:,}/{r['output_tokens']:,} | {r['usd']:.4f} | "
+            f"{r['input_tokens']:,}/{r['output_tokens']:,} | "
+            f"{'unpriced' if r['usd'] is None else format(r['usd'], '.4f')} | "
             f"{r['first_token_ms_median'] if r['first_token_ms_median'] is not None else '—'} |"
         )
     return "\n".join(rows)
