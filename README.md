@@ -7,6 +7,12 @@ Built with LangGraph for a fictional Colombian fintech.
 and a [browser voice simulator](apps/voice_simulator/README.md) with an optional graph viewer.
 AWS deployment and real telephony are [planned stages](docs/ROADMAP.md).
 
+![Animated offline Studio happy path: greeting, customer ID, code 1111, a three-installment proposal and one recorded commitment, with the graph nodes run on each turn](docs/images/demo.svg)
+
+*A real offline run of the Studio graph with the `mock` provider and synthetic fixture `demo-001`;
+green lines list the nodes executed on each turn. Regenerate with
+`uv run python scripts/render_demo.py`; `tests/test_demo_asset.py` fails when it is stale.*
+
 ![Local voice simulator with the call interface on the left and the LangGraph viewer on the right](docs/images/voice-visualizer.jpg)
 
 *The Spanish-language simulator before a call, with the optional technical viewer open.
