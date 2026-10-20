@@ -17,7 +17,9 @@ uv run python eval/run.py --provider anthropic --confirm-spend --max-usd 1.00
 ```
 
 The paid run refuses to start without `--confirm-spend`, refuses an unpriced model, and
-checks the budget after every turn. `--max-usd` is a soft cap: the turn in flight can
+checks the budget after every turn. The cap covers the whole run, not each scenario: each
+scenario receives what remains of it. A response from an unpriced model stops the run and
+keeps its raw token usage in the report. `--max-usd` is a soft cap: the turn in flight can
 overshoot it slightly. The report is rewritten after every scenario, so spend is recorded
 even if a later scenario fails. Prices: Haiku 4.5 at USD 1 / 5 per million input/output
 tokens; cache writes use the 5-minute TTL price (1.25× input) and reads 0.1× input.

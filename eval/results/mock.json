@@ -6,7 +6,7 @@
   "evaluated": 10,
   "input_tokens": 0,
   "output_tokens": 0,
-  "usd": 0.0,
+  "usd": 0,
   "scenarios": [
     {
       "id": "full-payment",
@@ -21,6 +21,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -36,6 +37,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -51,6 +53,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -66,6 +69,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -81,6 +85,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -96,6 +101,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -111,6 +117,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -126,6 +133,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -141,6 +149,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     },
     {
@@ -161,6 +170,7 @@
       "input_tokens": 0,
       "output_tokens": 0,
       "usd": 0.0,
+      "usage_by_model": {},
       "first_token_ms_median": null
     }
   ]
