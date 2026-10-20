@@ -1,0 +1,177 @@
+{
+  "provider": "mock",
+  "model": null,
+  "clock": "2026-10-19T09:00:00-05:00",
+  "passed": 10,
+  "evaluated": 10,
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "usd": 0.0,
+  "scenarios": [
+    {
+      "id": "full-payment",
+      "status": "pass",
+      "failures": [],
+      "turns": 5,
+      "wording_status": {
+        "deterministic": 4,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.08
+    },
+    {
+      "id": "three-installments",
+      "status": "pass",
+      "failures": [],
+      "turns": 5,
+      "wording_status": {
+        "deterministic": 4,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.02
+    },
+    {
+      "id": "outside-policy",
+      "status": "pass",
+      "failures": [],
+      "turns": 4,
+      "wording_status": {
+        "deterministic": 3,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.01
+    },
+    {
+      "id": "reported-payment",
+      "status": "pass",
+      "failures": [],
+      "turns": 4,
+      "wording_status": {
+        "deterministic": 3,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.01
+    },
+    {
+      "id": "disputed-debt",
+      "status": "pass",
+      "failures": [],
+      "turns": 4,
+      "wording_status": {
+        "deterministic": 3,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.02
+    },
+    {
+      "id": "unverified-identity",
+      "status": "pass",
+      "failures": [],
+      "turns": 5,
+      "wording_status": {
+        "deterministic": 1,
+        "none": 4
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.01
+    },
+    {
+      "id": "unclear-acceptance",
+      "status": "pass",
+      "failures": [],
+      "turns": 6,
+      "wording_status": {
+        "deterministic": 5,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.02
+    },
+    {
+      "id": "duplicate-confirmation",
+      "status": "pass",
+      "failures": [],
+      "turns": 6,
+      "wording_status": {
+        "deterministic": 5,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.02
+    },
+    {
+      "id": "changed-balance",
+      "status": "pass",
+      "failures": [],
+      "turns": 5,
+      "wording_status": {
+        "deterministic": 4,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.02
+    },
+    {
+      "id": "audio-interruption",
+      "status": "skipped",
+      "reason": "Needs interruption-aware voice playback; text evaluation cannot exercise it."
+    },
+    {
+      "id": "contact-blocked",
+      "status": "pass",
+      "failures": [],
+      "turns": 3,
+      "wording_status": {
+        "deterministic": 2,
+        "none": 1
+      },
+      "interpretation_errors": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "usd": 0.0,
+      "first_token_ms_median": null,
+      "seconds": 0.01
+    }
+  ]
+}
