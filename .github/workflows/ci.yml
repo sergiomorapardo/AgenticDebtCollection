@@ -22,8 +22,8 @@ jobs:
           enable-cache: true
       - run: uv python install
       - run: uv sync --locked --extra voice
-      - run: uv run ruff check src tests scripts
-      - run: uv run ruff format --check src tests scripts
+      - run: uv run ruff check src tests scripts eval
+      - run: uv run ruff format --check src tests scripts eval
       - run: uv run pytest -q
       - run: uv run collections-lab fixtures
       - name: Check LangGraph startup and Studio conversation
