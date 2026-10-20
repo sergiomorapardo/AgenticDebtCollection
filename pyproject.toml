@@ -3,6 +3,8 @@ name = "agentic-debt-collection"
 version = "0.1.0"
 description = "A conversational debt collection agent that negotiates payment plans and tracks payment commitments"
 requires-python = ">=3.12,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
   "holidays>=0.80,<1",
   "jinja2>=3.1.6,<4",
