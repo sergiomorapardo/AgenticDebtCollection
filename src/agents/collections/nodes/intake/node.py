@@ -4,6 +4,7 @@ from langgraph.runtime import Runtime
 
 from agents.collections.contact import check_contact
 from agents.collections.conversation import (
+    RESUMABLE_CLOSE_REASONS,
     recoverable_misclosure,
     terminal_response,
 )
@@ -124,7 +125,7 @@ def prepare_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             session.update(pending_offer_id=None, draft_terms={})
             return {**base, "intake_route": "interpret"}
         if (
-            session.get("close_reason") in {"customer_request", "repeated_refusal"}
+            session.get("close_reason") in RESUMABLE_CLOSE_REASONS
             and not session.get("agreement_id")
             and intent in {"continue", "options", "promise", "negotiate", "counteroffer"}
         ):
