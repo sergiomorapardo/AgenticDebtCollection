@@ -131,6 +131,7 @@ def run_scenario(scenario, *, provider, model, budget_usd=float("inf")):
             stream_responses=provider == "anthropic",
         )
         change = scenario.get("balance_change")
+        stopped = None
         for index, turn in enumerate(scenario["turns"]):
             turn = turn if isinstance(turn, dict) else {"text": turn}
             if change and index == change["before_turn"]:
@@ -158,6 +159,8 @@ def run_scenario(scenario, *, provider, model, budget_usd=float("inf")):
             except Exception as error:  # noqa: BLE001 - record and continue the evaluation
                 errors.append(f"turn {index + 1}: {type(error).__name__}")
                 replies.append({})
+            if index + 1 == len(scenario["turns"]):
+                break  # Every turn was sent: check the outcome; evaluate() stops later ones.
             try:
                 spent = usd(usage.usage_metadata)
             except ValueError:
@@ -167,8 +170,6 @@ def run_scenario(scenario, *, provider, model, budget_usd=float("inf")):
             if spent >= budget_usd:
                 stopped = f"stopped after turn {index + 1}: budget reached"
                 break
-        else:
-            stopped = None
         # A stopped scenario reports why instead of expectations for turns never sent.
         failures = errors + ([stopped] if stopped else check(scenario["id"], replies, repository))
         usage_by_model = dict(usage.usage_metadata)
@@ -210,6 +211,7 @@ def evaluate(scenarios, *, provider, model, max_usd, on_progress=None):
         elif spent >= max_usd:
             results.append({"id": scenario["id"], "status": "not_run", "reason": "budget"})
         else:
+            # Each scenario's usage starts at zero, so it receives what remains of the run cap.
             results.append(
                 run_scenario(scenario, provider=provider, model=model, budget_usd=max_usd - spent)
             )

@@ -188,3 +188,26 @@ def test_external_services_are_disabled_before_a_run(runner, monkeypatch, keep_a
     assert remaining == {"LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2"}
     assert os.environ["LANGSMITH_TRACING"] == os.environ["LANGCHAIN_TRACING_V2"] == "false"
     assert ("ANTHROPIC_API_KEY" in os.environ) is keep_anthropic
+
+
+def test_budget_crossed_on_the_last_turn_still_checks_the_outcome(runner, monkeypatch):
+    full_payment = next(s for s in scenarios() if s["id"] == "full-payment")
+    reads = []
+
+    class Usage:
+        @property
+        def usage_metadata(self):
+            reads.append(1)
+            tokens = 10_000_000 if len(reads) >= len(full_payment["turns"]) else 0
+            return {"claude-haiku-4-5-20251001": {"input_tokens": tokens, "output_tokens": 0}}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("langchain_core.callbacks.get_usage_metadata_callback", Usage)
+    result = runner.run_scenario(full_payment, provider="mock", model=None, budget_usd=1.0)
+    assert result["status"] == "pass" and result["turns"] == len(full_payment["turns"])
+    assert result["usd"] == pytest.approx(10.0)
