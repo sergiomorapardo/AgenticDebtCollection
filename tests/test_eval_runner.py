@@ -198,6 +198,7 @@ def test_budget_crossed_on_the_last_turn_still_checks_the_outcome(runner, monkey
         @property
         def usage_metadata(self):
             reads.append(1)
+            # One read per non-final turn, then the final snapshot: only that one is expensive.
             tokens = 10_000_000 if len(reads) >= len(full_payment["turns"]) else 0
             return {"claude-haiku-4-5-20251001": {"input_tokens": tokens, "output_tokens": 0}}
 
