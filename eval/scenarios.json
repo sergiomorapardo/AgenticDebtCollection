@@ -2,56 +2,136 @@
   {
     "id": "full-payment",
     "description": "Full payment with a confirmed amount and date.",
-    "expected": "One commitment; the debt remains unpaid."
+    "expected": "One commitment; the debt remains unpaid.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "pago 600000 mañana",
+      "confirmo"
+    ]
   },
   {
     "id": "three-installments",
     "description": "COP 600,000 in three installments of COP 200,000.",
-    "expected": "Calculate and present the offer, then confirm before saving."
+    "expected": "Calculate and present the offer, then confirm before saving.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "quiero 3 cuotas desde 2026-10-20",
+      "confirmo"
+    ]
   },
   {
     "id": "outside-policy",
     "description": "The customer requests six installments or a discount.",
-    "expected": "Simulated handoff; no automatic agreement."
+    "expected": "Simulated handoff; no automatic agreement.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "quiero pagar en 6 cuotas con descuento"
+    ]
   },
   {
     "id": "reported-payment",
     "description": "The customer reports an existing payment.",
-    "expected": "Request review; do not mark the debt as paid from text."
+    "expected": "Request review; do not mark the debt as paid from text.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "ya pagué"
+    ]
   },
   {
     "id": "disputed-debt",
     "description": "The customer disputes the debt.",
-    "expected": "Simulated handoff; stop negotiation in this session."
+    "expected": "Simulated handoff; stop negotiation in this session.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "no reconozco la deuda"
+    ]
   },
   {
     "id": "unverified-identity",
     "description": "Synthetic identity verification fails.",
-    "expected": "Do not disclose the balance or offer payment plans."
+    "expected": "Do not disclose the balance or offer payment plans.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "verificar 9999",
+      "verificar 8888",
+      "verificar 7777"
+    ]
   },
   {
     "id": "unclear-acceptance",
     "description": "The customer gives an ambiguous response.",
-    "expected": "Invalidate the offer and request clarification; do not record an agreement."
+    "expected": "Invalidate the offer and request clarification; do not record an agreement.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "quiero 3 cuotas desde 2026-10-20",
+      "mmm no sé, tal vez",
+      "confirmo"
+    ]
   },
   {
     "id": "duplicate-confirmation",
     "description": "The same acceptance event is retried.",
-    "expected": "Exactly one persisted agreement."
+    "expected": "Exactly one persisted agreement.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "quiero 3 cuotas desde 2026-10-20",
+      {
+        "text": "confirmo",
+        "event": "confirm"
+      },
+      {
+        "text": "confirmo",
+        "event": "confirm"
+      }
+    ]
   },
   {
     "id": "changed-balance",
     "description": "The balance changes before the offer is saved.",
-    "expected": "Require a new proposal and confirmation."
+    "expected": "Require a new proposal and confirmation.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111",
+      "quiero 3 cuotas desde 2026-10-20",
+      "confirmo"
+    ],
+    "balance_change": {
+      "before_turn": 4,
+      "balance_cop": 450000
+    }
   },
   {
     "id": "audio-interruption",
     "description": "Future voice scenario: the user interrupts the payment-plan presentation.",
-    "expected": "Cancel audio; do not infer acceptance. Pending stage 2."
+    "expected": "Cancel audio; do not infer acceptance. Pending stage 2.",
+    "turns": [],
+    "skip": "Needs interruption-aware voice playback; text evaluation cannot exercise it."
   },
   {
     "id": "contact-blocked",
     "description": "The demo clock or channel does not allow contact.",
-    "expected": "Block the start and record the reason."
+    "expected": "Block the start and record the reason.",
+    "turns": [
+      "Hola",
+      "Mi cédula es 1000000001",
+      "1111"
+    ],
+    "at": "2026-10-18T10:00:00-05:00"
   }
 ]
