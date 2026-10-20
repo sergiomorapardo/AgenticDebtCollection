@@ -9,8 +9,8 @@ AWS deployment and real telephony are [planned stages](docs/ROADMAP.md).
 
 ![Local voice simulator with the call interface on the left and the LangGraph viewer on the right](docs/images/voice-visualizer.jpg)
 
-*The local simulator before a call, with the optional technical viewer open. Select
-“Ver flujo técnico” to inspect the graph; during a call, it also shows node execution and timing.*
+*The Spanish-language simulator before a call, with the optional technical viewer open.
+When hidden, select “Ver flujo técnico” to open it; during a call, it also shows node execution and timing.*
 
 ```mermaid
 flowchart LR
