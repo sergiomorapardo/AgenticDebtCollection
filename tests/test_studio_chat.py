@@ -471,3 +471,70 @@ def test_payment_numbers_are_not_treated_as_identification(chat, monkeypatch, te
     assert calls == [text]
     assert "No pude encontrar" not in result["reply"]["text"]
     assert ChatMemory(ctx.repository).binding("first")["account_id"] is None
+
+
+def test_recovered_closure_signals_customer_led_continuation_without_reopening(chat):
+    send, ctx, _ = chat
+    identify(send)
+    stopped = send("terminar", "stop")
+    assert stopped["reply"]["finished"]
+    assert "continuation_available" not in stopped["reply"]
+    recalled = identify(send, "returning")
+    assert recalled["reply"]["stage"] == "closed" and recalled["reply"]["finished"]
+    assert recalled["reply"]["continuation_available"] is True
+    unclear = send("continuemos", "unclear", "returning")
+    assert unclear["reply"]["stage"] == "closed"
+    assert unclear["reply"]["continuation_available"] is True
+    again = send("terminar", "stop-again", "returning")
+    assert again["reply"]["stage"] == "closed"
+    assert "continuation_available" not in again["reply"]
+    assert identify(send, "third")["reply"]["continuation_available"] is True
+    resumed = send("quiero revisar opciones de pago", "options", "third")
+    assert resumed["reply"]["stage"] == "awaiting_terms" and not resumed["reply"]["finished"]
+    assert "continuation_available" not in resumed["reply"]
+    assert not ctx.repository.agreements()
+    assert len(ctx.repository.contacts_for("demo-001")) == 1
+
+
+@pytest.mark.parametrize("outcome", ["agreed", "handoff"])
+def test_recovered_ineligible_outcomes_do_not_signal_continuation(chat, outcome):
+    send, ctx, _ = chat
+    if outcome == "agreed":
+        agree(send)
+    else:
+        identify(send)
+        send("quiero un asesor", "advisor")
+    recalled = identify(send, "returning")
+    assert recalled["reply"]["stage"] == outcome and recalled["reply"]["finished"]
+    assert "continuation_available" not in recalled["reply"]
+    follow_up = send("quiero revisar opciones de pago", "options", "returning")
+    assert follow_up["reply"]["stage"] == outcome
+    assert "continuation_available" not in follow_up["reply"]
+    assert len(ctx.repository.agreements()) == (outcome == "agreed")
+
+
+@pytest.mark.parametrize(
+    ("session", "intent"),
+    [
+        ({"stage": "closed", "identity_verified": False, "close_reason": "customer_request"}, None),
+        (
+            {
+                "stage": "closed",
+                "identity_verified": True,
+                "close_reason": "customer_request",
+                "agreement_id": "agreement-1",
+            },
+            None,
+        ),
+        ({"stage": "closed", "identity_verified": True, "close_reason": None}, None),
+        ({"stage": "closed", "identity_verified": True, "close_reason": "repeated_refusal"}, "end"),
+        ({"stage": "handoff", "identity_verified": True, "close_reason": "customer_request"}, None),
+    ],
+)
+def test_continuation_signal_excludes_terminal_and_stop_cases(session, intent):
+    from agents.collections.conversation import continuation_available
+
+    assert not continuation_available(session, intent)
+    assert continuation_available(
+        {"stage": "closed", "identity_verified": True, "close_reason": "repeated_refusal"}
+    )

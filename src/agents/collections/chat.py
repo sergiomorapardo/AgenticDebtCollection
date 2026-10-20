@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from agents.collections.chat_memory import ChatMemory, customer_history_reply, summarize_history
 from agents.collections.config import data_directory
+from agents.collections.conversation import continuation_available
 from agents.collections.memory import event_hash
 from agents.collections.nodes.intake.tools import verify_demo_code
 from agents.collections.onboarding import onboarding_reply
@@ -234,11 +235,12 @@ def recover_history(state: ChatState, runtime: Runtime):
         session = history["sessions"][0]
         binding["session_id"] = session["session_id"]
         text = customer_history_reply(history, ctx.repository)
-        response = memory.save_transition(
-            state,
-            binding,
-            reply(text, session["stage"], session["stage"] in {"agreed", "closed", "handoff"}),
+        response = reply(
+            text, session["stage"], session["stage"] in {"agreed", "closed", "handoff"}
         )
+        if continuation_available(session):
+            response["continuation_available"] = True
+        response = memory.save_transition(state, binding, response)
         return {
             "session_id": binding["session_id"],
             "history_summary": summary,
