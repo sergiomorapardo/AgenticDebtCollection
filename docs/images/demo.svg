@@ -3,7 +3,7 @@
 <style>
 text{font:14px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre}.nodes,.head{font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .user{fill:#7dd3fc;font-weight:600}.agent{fill:#e5e7eb}.nodes{fill:#86efac}.head{fill:#9ca3af}
-.t0{animation:t0 15.400000000000002s infinite}@keyframes t0{0%,0.0%{opacity:0}2.6%,96%{opacity:1}100%{opacity:0}}.t1{animation:t1 15.400000000000002s infinite}@keyframes t1{0%,14.3%{opacity:0}16.9%,96%{opacity:1}100%{opacity:0}}.t2{animation:t2 15.400000000000002s infinite}@keyframes t2{0%,28.6%{opacity:0}31.2%,96%{opacity:1}100%{opacity:0}}.t3{animation:t3 15.400000000000002s infinite}@keyframes t3{0%,42.9%{opacity:0}45.5%,96%{opacity:1}100%{opacity:0}}.t4{animation:t4 15.400000000000002s infinite}@keyframes t4{0%,57.1%{opacity:0}59.7%,96%{opacity:1}100%{opacity:0}}
+.t0{animation:t0 15.4s infinite}@keyframes t0{0%,0.0%{opacity:0}2.6%,96%{opacity:1}100%{opacity:0}}.t1{animation:t1 15.4s infinite}@keyframes t1{0%,14.3%{opacity:0}16.9%,96%{opacity:1}100%{opacity:0}}.t2{animation:t2 15.4s infinite}@keyframes t2{0%,28.6%{opacity:0}31.2%,96%{opacity:1}100%{opacity:0}}.t3{animation:t3 15.4s infinite}@keyframes t3{0%,42.9%{opacity:0}45.5%,96%{opacity:1}100%{opacity:0}}.t4{animation:t4 15.4s infinite}@keyframes t4{0%,57.1%{opacity:0}59.7%,96%{opacity:1}100%{opacity:0}}
 @media (prefers-reduced-motion:reduce){.turn{animation:none!important;opacity:1}}
 </style>
 <rect width="100%" height="100%" rx="10" fill="#111827"/>
