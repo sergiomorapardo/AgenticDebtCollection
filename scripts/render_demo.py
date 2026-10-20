@@ -16,16 +16,24 @@ WIDTH, LINE, WRAP, STEP = 960, 20, 74, 2.2
 MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
 
 
+CREDENTIAL_PREFIXES = ("ANTHROPIC_", "LANGSMITH_", "LANGCHAIN_", "ELEVENLABS_")
+PINNED_ENV = {
+    "LANGSMITH_TRACING": "false",
+    "COLLECTIONS_LLM_PROVIDER": "mock",
+    "COLLECTIONS_RESPONSE_MODE": "streaming",
+}
+
+
+def no_network(*args, **kwargs):
+    raise RuntimeError("The demo renderer must not use the network")
+
+
 def offline_environment():
     for key in list(os.environ):
-        if key.startswith(("ANTHROPIC_", "LANGSMITH_", "LANGCHAIN_", "ELEVENLABS_")):
+        if key.startswith(CREDENTIAL_PREFIXES):
             del os.environ[key]
-    os.environ.update(LANGSMITH_TRACING="false", COLLECTIONS_LLM_PROVIDER="mock")
-
-    def no_network(*args, **kwargs):
-        raise RuntimeError("The demo renderer must not use the network")
-
-    socket.socket.connect = no_network
+    os.environ.update(PINNED_ENV)
+    socket.socket.connect = socket.socket.connect_ex = socket.getaddrinfo = no_network
 
 
 def run_happy_path():
@@ -84,7 +92,7 @@ def render(turns):
         rows.append(f'<g class="turn t{index}">{text}</g>')
         y += len(lines) * LINE + 14
     height = y + 16
-    cycle = STEP * (len(turns) + 2)
+    cycle = round(STEP * (len(turns) + 2), 1)
     keyframes = "".join(
         f".t{i}{{animation:t{i} {cycle}s infinite}}"
         f"@keyframes t{i}{{0%,{100 * i * STEP / cycle:.1f}%{{opacity:0}}"
@@ -112,7 +120,7 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "docs/images/demo.svg")
     args = parser.parse_args()
     offline_environment()
-    args.output.write_text(render(run_happy_path()))
+    args.output.write_text(render(run_happy_path()), newline="\n")
     print(f"Wrote {args.output.relative_to(ROOT)}")
 
 
