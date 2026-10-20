@@ -225,3 +225,8 @@ A request for options alone creates neither an offer to confirm nor a commitment
 | [Agent implementation](src/agents/collections) | Nodes, routes, fixtures, and policies |
 | [Tests](tests/README.md) | Offline checks |
 | [Attribution](NOTICE.md) | Structural and visual references |
+| [License](LICENSE) | MIT |
+
+## License
+
+Released under the [MIT License](LICENSE). Fixtures and examples are synthetic.

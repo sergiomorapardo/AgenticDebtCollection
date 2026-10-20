@@ -15,3 +15,9 @@ The visual documentation adapts teaching patterns from these repositories:
 
 The collection code, synthetic fixtures, and diagrams were created for this project.
 No credentials, customer data, course datasets, or procurement memory were copied.
+
+## License compatibility
+
+This repository is released under the [MIT License](LICENSE). AdvancedGenAI is MIT-licensed
+by the same author. The Alianza Team references are private repositories maintained by the
+author; only structure and teaching patterns were adapted from them.
