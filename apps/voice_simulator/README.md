@@ -75,7 +75,7 @@ A saved commitment never marks a debt as paid.
 | `GET /api/graphs` | Inspect registered graph maps, source version, and pending/invalid changes |
 | `GET /api/trace` | Read bounded, sanitized graph execution events without blocking the current turn |
 | `GET /api/session` | Restore current call, transcript, playback state, and elapsed time |
-| `POST /api/start` | Begin an isolated conversation |
+| `POST /api/start` | Begin a new call; identity is verified again in every call |
 | `POST /api/text` | Send a JSON `text` reply |
 | `POST /api/recording` | Transcribe raw WebM, Ogg, MP4, or WAV and send one turn |
 | `GET /api/audio/{audio_id}` | Read the current audio belonging to this browser session |
@@ -107,9 +107,14 @@ within this window avoids duplicate provider calls and business writes.
   errors are redacted; only dedicated input/provider errors carry user-facing messages.
   SQLite rolls back a failed graph transaction and already enforces one agreement per session.
   A greeting that fails during speech remains reachable for audio retry.
-- Each call has isolated SQLite state, response MP3s, and playback-event evidence under
-  ignored `.local/voice/<id>/`. Uploaded recording files are removed after transcription;
-  saved response audio and business evidence remain on disk.
+- Business records (sessions, offers, agreements, contacts) live in one SQLite file shared
+  by all calls, `.local/voice/business.sqlite3` by default (`--database` overrides it).
+  Each call keeps its own call ID, transcript, browser session, trace, response MP3s, and
+  playback-event evidence under ignored `.local/voice/<id>/`. Uploaded recording files are
+  removed after transcription; saved response audio and business evidence remain on disk.
+- For an independent scenario, start the server with a new `--data-dir` or `--database`.
+  Older per-call `conversation.sqlite3` files are left untouched and are no longer read;
+  no migration is needed for this synthetic demo.
 - `.env` is local to each worktree. Git only distributes `.env.example`.
 
 ## Optional technical viewer
@@ -177,7 +182,9 @@ and text needed for speech are sent to ElevenLabs. Use fictional data.
 
 ## Verification
 
-`uv run --extra voice pytest -q` passes 308 tests. Voice tests use fake speech and mock HTTP
+`tests/test_voice.py` and `tests/test_voice_resume.py` run offline. Resume tests cover authorized
+continuation, failed verification, cross-customer isolation, ineligible outcomes, replay and
+overlapping calls, current-call playback gating, hot-reloaded graphs, and hangup. Voice tests use fake speech and mock HTTP
 transport without paid calls. They cover provider request shape, redacted errors, automatic
 transcription/send, offer playback gating, retries without duplicate agreements, session/audio
 isolation, request replay, stale call IDs, origin/size checks, reload timing, uncertain failures, and live trace reads during a blocked node. Trace tests
@@ -210,10 +217,35 @@ or a nonempty `offer_id`, regardless of the words used.
 Hang up closes only the local voice transport without inventing a customer utterance,
 calling the model, or writing a payment agreement. It releases the graph lease even when
 interpretation is unavailable. It does not change the persisted business outcome.
-The graph's terminal `finished` replies still end the voice call. Customer-led continuation
-after a closed collection outcome is available through the text workflow; resuming the same
-business session across separate voice calls remains unsupported by this isolated demo.
+### Resume a business session in a new call
 
-- [ ] **TODO:** Resume the same business session across separate voice calls after fresh
-  identity verification and an explicit customer request, preserving history and avoiding
-  duplicate agreements. See the [roadmap](../../docs/ROADMAP.md#todo-resume-a-business-session-across-voice-calls).
+Call lifetime is separate from business-session lifetime. A new call never trusts a
+browser, call, account, or session identifier: the customer identifies and verifies again,
+and the shared workflow then selects that customer's most recent verified business session.
+
+```mermaid
+flowchart TD
+    S[New call] --> V{Fresh ID + code verified?}
+    V -->|No| N[No history; three failures end the call]
+    V -->|Yes| R[Recover latest verified session for this customer]
+    R --> O{Outcome}
+    O -->|Pending offer| P[Present terms again; play in this call before confirming]
+    O -->|Stopped collection| C[Call stays open; resume only on the customer's request]
+    O -->|Agreement or review| E[Report the outcome; call ends; nothing reopens]
+    O -->|Open negotiation| K[Continue the same session]
+```
+
+| Previous outcome | What the new call shows |
+| --- | --- |
+| Pending offer | The proposal is repeated; replies stay locked until its audio plays in this call |
+| `terminar` or repeated refusal | **Es tu turno** stays available; a request such as `quiero revisar opciones de pago` resumes |
+| Recorded commitment or human review | The outcome is reported and the call ends, as in the original call |
+
+A `finished` reply ends the call unless the workflow marks it `continuation_available`;
+a later stop or decline ends it normally. In the voice API, `finished` reports the call,
+while `details.stage` reports the business outcome. An open call ends on hangup or when its
+browser session expires after one hour of inactivity, like any other call. Playback acknowledgements never carry over.
+Agreements stay unique per business session, so retries, reconnects, repeated requests and
+overlapping calls for the same customer cannot create a second agreement. Business turns
+from different calls run one at a time on the shared SQLite file, so a slow model turn
+delays other calls. Hangup still writes nothing to the business session.
