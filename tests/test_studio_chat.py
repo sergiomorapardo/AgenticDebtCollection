@@ -9,6 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from agents.collections.agent import build_graph
 from agents.collections.chat_memory import ChatMemory, summarize_history
+from agents.collections.conversation import continuation_available
 from agents.collections.memory import ConflictError, SQLiteRepository
 from agents.collections.runtime import AppContext
 
@@ -528,13 +529,46 @@ def test_recovered_ineligible_outcomes_do_not_signal_continuation(chat, outcome)
         ),
         ({"stage": "closed", "identity_verified": True, "close_reason": None}, None),
         ({"stage": "closed", "identity_verified": True, "close_reason": "repeated_refusal"}, "end"),
+        (
+            {"stage": "closed", "identity_verified": True, "close_reason": "customer_request"},
+            "decline",
+        ),
+        (
+            {"stage": "closed", "identity_verified": True, "close_reason": "customer_request"},
+            "refuse",
+        ),
         ({"stage": "handoff", "identity_verified": True, "close_reason": "customer_request"}, None),
     ],
 )
 def test_continuation_signal_excludes_terminal_and_stop_cases(session, intent):
-    from agents.collections.conversation import continuation_available
-
     assert not continuation_available(session, intent)
-    assert continuation_available(
-        {"stage": "closed", "identity_verified": True, "close_reason": "repeated_refusal"}
+
+
+@pytest.mark.parametrize("reason", ["customer_request", "repeated_refusal"])
+@pytest.mark.parametrize("intent", [None, "unclear", "complaint", "history"])
+def test_continuation_signal_allows_resumable_closures(reason, intent):
+    session = {"stage": "closed", "identity_verified": True, "close_reason": reason}
+    assert continuation_available(session, intent)
+
+
+def test_legacy_false_closure_signals_continuation_until_the_customer_stops(chat):
+    import json
+
+    from agents.collections.conversation import LEGACY_CLOSE
+
+    send, ctx, _ = chat
+    identify(send)
+    session_id = ChatMemory(ctx.repository).binding("first")["session_id"]
+    session = ctx.repository.get_session(session_id)
+    session.update(stage="closed", pending_offer_id=None)
+    session["history"].append(
+        {"event_id": "legacy", "user": "ayudame a programar en python", "assistant": LEGACY_CLOSE}
     )
+    with ctx.repository.connection() as db:
+        db.execute("UPDATE sessions SET data=? WHERE id=?", (json.dumps(session), session_id))
+    recalled = identify(send, "returning")
+    assert recalled["reply"]["continuation_available"] is True
+    stopped = send("terminar", "stop", "returning")
+    assert stopped["reply"]["stage"] == "closed"
+    assert "continuation_available" not in stopped["reply"]
+    assert not ctx.repository.agreements()

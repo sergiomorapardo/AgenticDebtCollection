@@ -81,10 +81,12 @@ def recoverable_misclosure(session):
 
 
 def continuation_available(session, intent=None):
-    """Whether a channel should keep listening for a customer-led continuation request.
+    """Whether a channel should keep listening because the customer may resume.
 
-    This reopens nothing: intake still requires the customer's newly understood request.
-    Agreements, handoffs, failed verification and other closures stay terminal.
+    This reopens nothing and does not promise a resumption: intake still requires the
+    customer's newly understood request, and its 20-turn cap routes that request to human
+    review instead. Agreements, handoffs, failed verification and other closures stay
+    terminal.
     """
     if intent in {"end", "decline", "refuse"}:
         return False
@@ -124,7 +126,7 @@ def terminal_response(session, text, *, intent=None):
             prefix
             + "Tu solicitud quedó registrada para revisión. No puedo transferirte a un asesor desde aquí; no se registró un pago ni continuaré negociando en esta conversación."
         )
-    if session.get("close_reason") in {"customer_request", "repeated_refusal"}:
+    if session.get("close_reason") in RESUMABLE_CLOSE_REASONS:
         if intent in {"end", "decline", "refuse"}:
             return "Entendido. No insistiré con el cobro ni registraré un nuevo acuerdo."
         if intent == "off_topic":
