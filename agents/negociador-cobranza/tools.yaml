@@ -1,5 +1,5 @@
 # No sandbox tools: the agent reads untrusted customer text and only needs the backend.
-# The five custom tools are answered by managed/bridge.py, which wraps the existing domain code.
+# The five custom tools are answered by src/collections_lab/channels/managed_agent.py, which wraps the existing domain code.
 tools:
   - type: agent_toolset_20260401
     default_config: {enabled: false}

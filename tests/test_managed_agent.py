@@ -141,3 +141,65 @@ def test_review_is_queued_without_identity_data(conversation, tmp_path):
     assert result["review_id"].startswith("review-")
     stored = (tmp_path / "reviews.jsonl").read_text()
     assert "1111" not in stored and "1000000001" not in stored
+
+
+def test_non_ascii_and_wrong_type_inputs_return_errors(conversation):
+    assert verify(conversation, code="11é1") == {"verified": False, "attempts_left": 2}
+    verify(conversation)
+    conversation.customer_message("cuotas")
+    for bad in ("abc", True, 2.5):
+        result = call(
+            conversation,
+            "collections_quote_plan",
+            installments=bad,
+            first_payment_date="2026-10-20",
+        )
+        assert "error" in result
+
+
+def test_recording_twice_returns_same_agreement(conversation):
+    verify(conversation)
+    conversation.customer_message("pago completo el 2026-10-20")
+    offer = call(
+        conversation, "collections_quote_plan", installments=1, first_payment_date="2026-10-20"
+    )
+    conversation.customer_message("confirmo")
+    first = call(
+        conversation,
+        "collections_record_commitment",
+        offer_id=offer["offer_id"],
+        confirmation_quote="confirmo",
+    )
+    second = call(
+        conversation,
+        "collections_record_commitment",
+        offer_id=offer["offer_id"],
+        confirmation_quote="confirmo",
+    )
+    assert first["agreement_id"] == second["agreement_id"]
+    assert len(conversation.repository.agreements()) == 1
+
+
+def test_second_session_same_day_is_refused_without_account_data(conversation, tmp_path):
+    verify(conversation)
+    again = ManagedConversation(
+        repository=conversation.repository,
+        now=NOW,
+        session_id="sesn_other",
+        reviews_path=tmp_path / "reviews.jsonl",
+    )
+    result = verify(again)
+    assert result["verified"] is False and result["closed"] is True
+    assert "error" in call(again, "collections_get_account_summary")
+
+
+def test_review_summary_redacts_digit_runs(conversation, tmp_path):
+    verify(conversation)
+    call(
+        conversation,
+        "collections_request_human_review",
+        reason="other",
+        summary="Cliente 1000000001 con código 1111 pide plazo.",
+    )
+    stored = (tmp_path / "reviews.jsonl").read_text()
+    assert "1000000001" not in stored and "1111" not in stored

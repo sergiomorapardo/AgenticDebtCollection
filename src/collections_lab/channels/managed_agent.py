@@ -3,6 +3,7 @@
 import argparse
 import hmac
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -60,6 +61,8 @@ class ManagedConversation:
             return handlers[name](tool_input, event_id)
         except (ValueError, ConflictError) as exc:
             return {"error": str(exc)}
+        except Exception:  # noqa: BLE001 - the session waits for a result to every call
+            return {"error": "Internal backend error. Tell the customer to try again later."}
 
     def _persist(self, event_id: str, draft_offer: Offer | None = None) -> None:
         state = {
@@ -83,7 +86,7 @@ class ManagedConversation:
         expected = codes.get(account_id, "") if account_id else ""
         given = str(tool_input.get("code", "")).strip()
         # Same answer for an unknown document and a wrong code: no account enumeration.
-        if not expected or not hmac.compare_digest(expected, given):
+        if not expected or not hmac.compare_digest(expected.encode(), given.encode()):
             self.failed_attempts += 1
             if self.failed_attempts >= MAX_IDENTITY_ATTEMPTS:
                 self.closed = True
@@ -102,8 +105,8 @@ class ManagedConversation:
         try:
             self._persist(event_id)
         except ConflictError as exc:
-            self.closed = True
-            return {"verified": True, "closed": True, "error": str(exc)}
+            self.account_id, self.session_data, self.closed = None, {}, True
+            return {"verified": False, "closed": True, "reason": str(exc)}
         account = self.repository.get_account(account_id)
         return {"verified": True, "customer_label": account.customer_label}
 
@@ -196,7 +199,7 @@ class ManagedConversation:
             "session_id": self.session_id,
             "account_id": self.account_id,
             "reason": tool_input.get("reason"),
-            "summary": str(tool_input.get("summary", ""))[:1000],
+            "summary": re.sub(r"\d{4,}", "[redacted]", str(tool_input.get("summary", "")))[:1000],
             "created_at": self.now.isoformat(),
         }
         self.reviews_path.parent.mkdir(parents=True, exist_ok=True)
