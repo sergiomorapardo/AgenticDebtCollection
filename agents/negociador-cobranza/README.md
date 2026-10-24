@@ -69,6 +69,20 @@ Gate          the agent only proposes; record_commitment revalidates in code.
 Left out      voice (latency), discounts, payments, real outbound messages
 ```
 
+## Limits
+
+- **Acceptance meaning is prompt-dependent.** The backend proves that `confirmation_quote` is the
+  customer's latest message, sent after the offer. It does not prove that the message is an
+  unconditional acceptance ("acepto si me descuentan" passes the quote check). Keyword filters
+  were rejected: "si, acepto" without an accent is a common yes.
+- **Identity attempts are per session**, as in the LangGraph thread (ID-03). A new session gets three
+  more attempts. This is acceptable only for the fictional demo codes.
+- **One session per account per day.** Verification records a contact, so a second same-day session
+  is refused by `check_contact`. The LangGraph flow resumes those cases (HP-06/HP-07); this channel
+  does not yet. Leaving with `/salir` after verification still uses the day's contact.
+- **Budget** is in cents of USD: `--budget-cents 100` is USD 1. Sessions stay idle after `/salir`;
+  idle time is not billed.
+
 ## Files
 
 | File | What it is |
