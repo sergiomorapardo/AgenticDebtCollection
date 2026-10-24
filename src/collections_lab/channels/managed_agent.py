@@ -3,6 +3,7 @@
 import argparse
 import hmac
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -15,6 +16,7 @@ from agents.collections.memory import ConflictError, SQLiteRepository, event_has
 from agents.collections.policy import build_offer, load_policy
 from collections_lab.config.settings import load_settings
 
+LOGGER = logging.getLogger(__name__)
 MAX_IDENTITY_ATTEMPTS = 3
 DEFAULT_BUDGET_CENTS = "100"
 
@@ -61,7 +63,10 @@ class ManagedConversation:
             return handlers[name](tool_input, event_id)
         except (ValueError, ConflictError) as exc:
             return {"error": str(exc)}
-        except Exception:  # noqa: BLE001 - the session waits for a result to every call
+        except Exception:
+            # The session waits for a result to every call. Tool input holds the document
+            # and code, so only the tool name is logged.
+            LOGGER.exception("Tool %s failed", name)
             return {"error": "Internal backend error. Tell the customer to try again later."}
 
     def _persist(self, event_id: str, draft_offer: Offer | None = None) -> None:

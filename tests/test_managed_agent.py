@@ -203,3 +203,15 @@ def test_review_summary_redacts_digit_runs(conversation, tmp_path):
     )
     stored = (tmp_path / "reviews.jsonl").read_text()
     assert "1000000001" not in stored and "1111" not in stored
+
+
+def test_unexpected_backend_failure_still_answers(conversation, monkeypatch, caplog):
+    verify(conversation)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("database locked")
+
+    monkeypatch.setattr(conversation.repository, "get_account", broken)
+    result = call(conversation, "collections_get_account_summary")
+    assert result == {"error": "Internal backend error. Tell the customer to try again later."}
+    assert "collections_get_account_summary" in caplog.text and "1111" not in caplog.text
