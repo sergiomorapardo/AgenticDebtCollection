@@ -1,0 +1,5 @@
+name: negociador-cobranza
+description: "Negotiates a payment plan by text with one fictional customer per session; the local backend answers every money and identity tool."
+model:
+  id: claude-haiku-5-5
+  effort: low

@@ -1,0 +1,98 @@
+# No sandbox tools: the agent reads untrusted customer text and only needs the backend.
+# The five custom tools are answered by managed/bridge.py, which wraps the existing domain code.
+tools:
+  - type: agent_toolset_20260401
+    default_config: {enabled: false}
+
+  - type: custom
+    name: collections_verify_identity
+    description: >-
+      Checks the customer's document number and verification code against the backend.
+      Returns {"verified": true, "customer_label": ...} on success, or {"verified": false,
+      "attempts_left": N} on failure; after three failures it returns {"closed": true} and every
+      later call in this conversation fails. Use it as soon as the customer gives both values, and
+      before you share any account data. Do not call it again after it succeeds, and do not guess
+      values the customer did not write.
+    input_schema:
+      type: object
+      properties:
+        document_id:
+          type: string
+          description: The customer's ID number (cédula), digits only, exactly as the customer wrote it.
+        code:
+          type: string
+          description: The verification code the customer wrote, for example "1111".
+      required: [document_id, code]
+
+  - type: custom
+    name: collections_get_account_summary
+    description: >-
+      Returns the verified customer's account: balance in COP, original due date, today's date, the
+      payment policy (maximum installments, latest allowed first payment date, discounts allowed),
+      and any agreement already saved for this account with its dates and amounts. Use it once,
+      right after identity verification, and again only if the customer asks about their saved
+      agreement. It fails with an error if identity is not verified in this conversation.
+    input_schema:
+      type: object
+      properties: {}
+
+  - type: custom
+    name: collections_quote_plan
+    description: >-
+      Asks the backend to build a payment plan under the policy. Returns {"offer_id": ...,
+      "installments": [{"due_date": "YYYY-MM-DD", "amount_cop": N}]} with exact amounts, or an
+      error that says which term is outside the policy and what the limits are. Each successful
+      call replaces the previous offer; only the most recent offer can be accepted. Use it for every
+      plan you present, including full payment (installments = 1). Do not use it to answer a
+      question about the balance; the account summary has that.
+    input_schema:
+      type: object
+      properties:
+        installments:
+          type: integer
+          minimum: 1
+          description: Number of monthly installments the customer asked for. 1 means full payment.
+        first_payment_date:
+          type: string
+          description: First payment date in YYYY-MM-DD. Convert relative dates ("mañana", "el viernes") using today's date from the account summary.
+      required: [installments, first_payment_date]
+
+  - type: custom
+    name: collections_record_commitment
+    description: >-
+      Saves the customer's payment commitment for the most recent offer. The backend revalidates the
+      offer against the balance and the policy and saves at most one agreement per conversation.
+      Returns {"agreement_id": ...} on success; on failure it returns an error that says why
+      (stale offer, quote and acceptance in the same turn, quote text not from the customer). Use it
+      only when the customer's latest message explicitly and unconditionally accepts the offer you
+      presented in an earlier message. Do not use it for conditional answers or for plan selection.
+    input_schema:
+      type: object
+      properties:
+        offer_id:
+          type: string
+          description: The offer_id returned by the most recent collections_quote_plan call.
+        confirmation_quote:
+          type: string
+          description: The customer's latest message, copied exactly, character by character. The backend compares it with the message it received.
+      required: [offer_id, confirmation_quote]
+
+  - type: custom
+    name: collections_request_human_review
+    description: >-
+      Puts the conversation in the queue for a human collections officer. Returns {"review_id": ...}.
+      It does not approve anything and does not promise a result or a date for the review. Use it
+      when the customer asks for something outside the policy (a discount, more installments, a
+      later date), says they cannot pay, disputes the debt, or asks for a person, and they agree to
+      the review. Do not use it to avoid a normal plan that the policy allows.
+    input_schema:
+      type: object
+      properties:
+        reason:
+          type: string
+          enum: [discount_request, outside_policy_terms, cannot_pay, dispute, asks_for_person, other]
+          description: The main reason for the review.
+        summary:
+          type: string
+          description: Two or three sentences in Spanish for the officer. What the customer asked and what you offered. No document number or code.
+      required: [reason, summary]
