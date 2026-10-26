@@ -904,3 +904,92 @@ def test_menu_selection_is_not_a_day_of_month(model_call, text):
     )
     assert result.status == "classified" and result.turn.installments == 3
     assert result.turn.payment_date is None and result.turn.date_clarification is None
+
+
+@pytest.mark.parametrize(
+    "text,fields",
+    [
+        (
+            "mejor 3 cuotas a fin de mes",
+            {"installments": 3, "installments_evidence": {"quote": "3"}},
+        ),
+        (
+            "puedo 200000 pesos al mes a fin de mes",
+            {
+                "amount_cop": 200000,
+                "amount_evidence": {"quote": "200000"},
+                "amount_is_capacity": True,
+            },
+        ),
+    ],
+)
+def test_unsupported_date_keeps_separate_current_financial_terms(model_call, text, fields):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        **fields,
+        "date_reference": {"quote": "A FIN DE MES", "day": 31},
+        "payment_date": "2026-10-31",
+    }
+    result = understand_turn(text, ctx=CONTEXT, today=TODAY, stage="awaiting_terms")
+    assert result.status == "classified" and result.turn.date_clarification == "multiple"
+    assert result.turn.payment_date is None and result.turn.acceptance == "none"
+    for key, value in fields.items():
+        if not key.endswith("evidence"):
+            assert getattr(result.turn, key) == value
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("pago el 20 de octubre del 2026 en la mañana", date(2026, 10, 20)),
+        ("mañana por la mañana", date(2026, 10, 20)),
+        ("puedo pagar por la mañana", None),
+        ("en la mañana", None),
+    ],
+)
+def test_morning_is_not_tomorrow(model_call, text, expected):
+    _, response = model_call
+    response["result"] = {"intent": "unclear", "payment_date": "2026-10-20"}
+    result = understand_turn(text, ctx=CONTEXT, today=date(2026, 10, 19), stage="awaiting_terms")
+    assert result.status == "classified" and result.turn.payment_date == expected
+    assert result.turn.date_clarification == (None if expected else "multiple")
+
+
+@pytest.mark.parametrize(
+    "text,count",
+    [
+        ("prefiero el primero, el de 2 cuotas", 2),
+        ("el 3, para pagar menos", 3),
+    ],
+)
+def test_menu_explanation_does_not_make_option_number_a_date(model_call, text, count):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": count,
+        "installments_evidence": {"quote": str(count)},
+    }
+    result = understand_turn(
+        text, ctx=CONTEXT, today=TODAY, stage="ready", context={"dialogue": {"awaiting": "option"}}
+    )
+    assert result.status == "classified" and result.turn.installments == count
+    assert result.turn.payment_date is None and result.turn.date_clarification is None
+
+
+def test_explicit_date_with_menu_choice_still_resolves(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 3,
+        "installments_evidence": {"quote": "3"},
+    }
+    result = understand_turn(
+        "quiero 3 cuotas el 20",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="ready",
+        context={"dialogue": {"awaiting": "option"}},
+    )
+    assert result.status == "classified" and result.turn.installments == 3
+    assert result.turn.payment_date == date(2026, 10, 20)

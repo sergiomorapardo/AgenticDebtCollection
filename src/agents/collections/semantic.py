@@ -71,6 +71,8 @@ def _date_references(text, context):
     for match in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized):
         add(match, year=int(match[1]), month=int(match[2]), day=int(match[3]))
     for match in re.finditer(r"\b(pasado manana|manana|hoy)\b", normalized):
+        if match[1] == "manana" and re.search(r"\bla\s+$", normalized[: match.start()]):
+            continue
         value = context["today"] + timedelta(
             days={"hoy": 0, "manana": 1, "pasado manana": 2}[match[1]]
         )
@@ -104,7 +106,11 @@ def _date_references(text, context):
         if (
             dialogue.get("awaiting") == "option"
             and not awaiting_date
-            and not re.search(r"\b(?:dia|cuotas?|pagos?|pagar|desde|para)\b", normalized)
+            and not match[0].startswith("dia ")
+            and not re.search(
+                r"\b(?:desde|para|pago|pagar|empiezo|empezando|inicio)\s*$|\b\d+\s+(?:cuotas?|pagos?)\b",
+                normalized[: match.start()],
+            )
         ):
             continue
         add(match, day=int(match[1]))
@@ -214,11 +220,26 @@ def _ground_payment_date(turn, text, today, stage, context):
     ):
         references = [PaymentDateReference.model_validate(pending)]
         pending_confirmation = True
-    unsupported = not references and turn.date_reference is not None
+    unsupported = not references and (
+        turn.date_reference is not None or re.search(r"\bla\s+manana\b", normalized)
+    )
     if unsupported:
         # An unsupported date is a clarification, never a provider failure or an
         # opportunity to authorize the model's guessed calendar components.
-        references = [PaymentDateReference(quote=normalized[:160] or text[:160])]
+        from agents.collections.conversation import normalize_text
+
+        quote = (
+            normalize_text(normalize_transcript_numbers(turn.date_reference.quote))
+            if turn.date_reference
+            else ""
+        )
+        quote = re.sub(r"\bprimero\b", "1", quote)
+        match = re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", normalized) if quote else None
+        if match is None:
+            match = re.search(r"\b(?:(?:en|por)\s+)?la\s+manana\b", normalized)
+        references = [
+            PaymentDateReference(quote=match[0] if match else normalized[:160] or text[:160])
+        ]
     if not references:
         return turn.model_copy(update={"date_clarification": None})
     reference = references[0]

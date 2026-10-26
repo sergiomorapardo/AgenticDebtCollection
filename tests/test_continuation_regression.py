@@ -606,3 +606,28 @@ def test_unrecognized_date_clarifies_without_creating_agreement(date_conversatio
     assert "día, mes y año" in reply["text"] and "error del servicio" not in reply["text"]
     assert reply["offer_id"] is None and not ctx.repository.agreements()
     assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+
+
+def test_unsupported_date_keeps_new_installments_until_complete_proposal(
+    date_conversation, monkeypatch
+):
+    send, ctx, sid = date_conversation()
+    send("quiero 2 cuotas desde 2026-10-20")
+    model_stub(
+        monkeypatch,
+        {
+            "intent": "negotiate",
+            "installments": 3,
+            "installments_evidence": {"quote": "3"},
+            "date_reference": {"quote": "a fin de mes", "day": 31},
+        },
+        [],
+    )
+    ctx.provider = "anthropic"
+    question = send("mejor 3 cuotas a fin de mes")
+    assert question["offer_id"] is None and not ctx.repository.agreements()
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    ctx.provider = "mock"
+    proposal = send("el 20 de octubre del 2026 en la mañana")
+    assert proposal["stage"] == "awaiting_confirmation" and "200,000 COP" in proposal["text"]
+    assert "2026-10-20" in proposal["text"] and not ctx.repository.agreements()
