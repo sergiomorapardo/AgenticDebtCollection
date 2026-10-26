@@ -395,6 +395,19 @@ def test_dictated_number_is_normalized_in_saved_transcript(session, monkeypatch)
     assert session.reply["stage"] == "ready"
 
 
+def test_comma_separated_demo_id_is_found(session, monkeypatch):
+    session.send("Hola")
+    monkeypatch.setattr(
+        session.speech,
+        "transcribe",
+        lambda _: "Mi cédula es 1, 2, 3, 4, 5, 6, 7, 8, 9",
+    )
+    session.respond_to_audio("test.wav")
+    assert session.history[-2]["content"] == "Mi cédula es 123456789"
+    assert session.reply["stage"] == "awaiting_identity"
+    assert session.send("verificar 1111")["stage"] == "ready"
+
+
 def test_browser_stream_queue_barge_in_and_recording_preroll(tmp_path):
     """Exercise the shipped browser code with controlled audio/network timing in Node."""
     import shutil

@@ -88,6 +88,9 @@ Capture starts before detection so short utterances such as `uno` retain their i
 Supported Spanish cardinals are normalized before display and interpretation: `uno` → `1`,
 `doscientos mil pesos` → `200000 pesos`, and `1,5 millones` → `1500000`. During identification,
 dictated digits such as `cero cero uno uno` become `0011`, preserving leading zeroes.
+Comma-separated lists of at least three single digits are also joined in identity stages:
+`1, 2, 3, 4, 5, 6, 7, 8, 9` becomes `123456789`. An extra `10` is not discarded or
+silently corrected to the demo ID. The demo ID and verification code stay visible below the call.
 Articles such as `una persona` remain prose. Unsupported/ambiguous expressions are preserved;
 this cannot repair an incorrectly recognized word. Pydantic structured output separately
 requires strict integer amounts/counts and quoted numeric evidence from the current message.

@@ -516,12 +516,21 @@ def test_transcripts_render_spoken_numbers_as_digits(text, expected):
     assert normalize_transcript_numbers(expected) == expected
 
 
-@pytest.mark.parametrize("text", ["0011", "cero cero uno uno", "0 0 1 1"])
+@pytest.mark.parametrize("text", ["0011", "cero cero uno uno", "0 0 1 1", "0, 0, 1, 1"])
 def test_identifier_transcription_retains_leading_zeroes(text):
     from agents.collections.numbers import normalize_transcript_numbers
 
     first_pass = normalize_transcript_numbers(text)
     assert normalize_transcript_numbers(first_pass, identifiers=True) == "0011"
+
+
+def test_comma_separated_identifiers_do_not_discard_extra_digits():
+    from agents.collections.numbers import normalize_transcript_numbers
+
+    digits = "1, 2, 3, 4, 5, 6, 7, 8, 9"
+    assert normalize_transcript_numbers(digits, identifiers=True) == "123456789"
+    assert normalize_transcript_numbers(digits + ", 10", identifiers=True) == digits + ", 10"
+    assert normalize_transcript_numbers(digits) == digits
 
 
 @pytest.mark.parametrize(

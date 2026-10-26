@@ -223,6 +223,17 @@ def normalize_transcript_numbers(text: str, *, identifiers=False) -> str:
                 continue
         text = text[:start] + replacement + text[end:]
     if identifiers:
+        # STT often punctuates digit dictation as a list. Join only complete lists of
+        # at least three single digits; never drop an extra "10" to match a known ID.
+        def join_digits(match):
+            parts = re.split(r"\s*,\s*", match[0])
+            return "".join(parts) if all(len(part) == 1 for part in parts) else match[0]
+
+        text = re.sub(
+            r"(?<![\w.,])\d+(?:\s*,\s*\d+){2,}(?!\w)",
+            join_digits,
+            text,
+        )
         for start, end, value in reversed(list(identity_spans(text))):
             text = text[:start] + value + text[end:]
     return text
