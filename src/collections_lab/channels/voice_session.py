@@ -1,11 +1,13 @@
 """Voice turns around the existing graph, gated by current-offer playback completion."""
 
+import asyncio
 import hashlib
 import importlib
 import importlib.abc
 import importlib.machinery
 import json
 import sys
+from contextlib import aclosing
 from copy import deepcopy
 from pathlib import Path
 from threading import RLock
@@ -15,6 +17,7 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 
 from agents.collections.agent import build_graph
+from agents.collections.numbers import normalize_transcript_numbers
 from collections_lab.channels.elevenlabs import SpeechError
 
 
@@ -402,16 +405,30 @@ class VoiceSession:
         self.reply = None
         self.audio = None
         self.played_audio = None
+        self.interrupted_audio = None
+        self.audio_status = "none"
+        self._audio_task = None
+        self._audio_loop = None
+        self._offer_id = None
+        self._offer_text = None
+        self._unheard_offer = None
         self.warning = ""
         self.latencies = {}
         self._lock = RLock()
+        self._audio_lock = RLock()
 
     def transcribe(self, path):
         with self._lock:
             started = perf_counter()
             event_id = self.trace.start("speech_to_text", kind="speech")
             try:
-                text = self.speech.transcribe(path)
+                text = normalize_transcript_numbers(
+                    self.speech.transcribe(path),
+                    identifiers=bool(
+                        self.reply
+                        and self.reply["stage"] in {"awaiting_customer", "awaiting_identity"}
+                    ),
+                )
             except Exception:
                 self.trace.finish(event_id, failed=True)
                 raise
@@ -426,7 +443,14 @@ class VoiceSession:
                 return False
             if self.played_audio == self.audio:
                 return False
+            if self.audio_status != "complete" or self.interrupted_audio == self.audio:
+                return False
             self.played_audio = self.audio
+            if (
+                self.reply.get("offer_id") == self._offer_id
+                and self.reply["text"] == self._offer_text
+            ):
+                self._unheard_offer = None
             with (self.directory / "playback-acknowledgements.jsonl").open("a") as stream:
                 stream.write(
                     json.dumps(
@@ -450,6 +474,7 @@ class VoiceSession:
     def end_call(self):
         """Close the local transport without interpreting synthetic customer speech."""
         with self._lock:
+            self.cancel_audio()
             if not self.reply or not self.reply["finished"]:
                 self.reply = {"finished": True, "stage": "closed", "text": "Llamada finalizada."}
             self.audio = self.played_audio = None
@@ -469,7 +494,11 @@ class VoiceSession:
             raise VoiceInputError("El turno falló. Finaliza esta llamada antes de continuar.")
         if self.reply and self.reply["finished"]:
             raise VoiceInputError("Esta sesión terminó. Inicia una nueva conversación.")
-        if self.requires_offer_playback() and (not self.audio or self.played_audio != self.audio):
+        if (
+            self.requires_offer_playback()
+            and not (self.audio and self.interrupted_audio == self.audio)
+            and (not self.audio or self.played_audio != self.audio)
+        ):
             raise VoiceInputError(
                 "Espera a que termine la oferta antes de responder. "
                 "Si no suena, pulsa Escuchar mensaje; si falló, pulsa Reintentar audio."
@@ -487,6 +516,10 @@ class VoiceSession:
             if not text or len(text) > 4000:
                 raise VoiceInputError("Escribe o graba un mensaje de entre 1 y 4000 caracteres.")
             self.check_turn()
+            self.context.offer_audio_completed = self._unheard_offer is None and (
+                not self.requires_offer_playback()
+                or bool(self.audio and self.played_audio == self.audio)
+            )
             if new_turn:
                 self.trace.begin()
             started = perf_counter()
@@ -514,6 +547,9 @@ class VoiceSession:
                         raise TypeError("Graph returned an invalid voice reply")
                     self.trace.complete()
                 self.reply = reply
+                if reply.get("offer_id") and reply["offer_id"] != self._offer_id:
+                    self._offer_id = self._unheard_offer = reply["offer_id"]
+                    self._offer_text = reply["text"]
                 self.latencies["agent_seconds"] = round(perf_counter() - started, 3)
                 self.history.extend(
                     [
@@ -534,14 +570,23 @@ class VoiceSession:
             return self.reply
 
     def retry_audio(self):
-        with self._lock:
+        with self._lock, self._audio_lock:
             if self.failed:
                 raise VoiceInputError("El turno falló. Finaliza esta llamada antes de continuar.")
             if self.reply is None:
                 raise VoiceInputError("Inicia una sesión primero.")
+            self.cancel_audio()
             self.audio = None
             self.played_audio = None
+            self.interrupted_audio = None
             self.warning = ""
+            self.audio_status = "none"
+            for key in ("tts_seconds", "tts_first_chunk_seconds"):
+                self.latencies.pop(key, None)
+            if hasattr(self.speech, "stream_synthesize"):
+                self.audio = str(self.directory / f"reply-{uuid4().hex}.pcm")
+                self.audio_status = "pending"
+                return self.audio
             started = perf_counter()
             event_id = self.trace.start("text_to_speech", kind="speech")
             try:
@@ -549,7 +594,9 @@ class VoiceSession:
                 path = self.directory / f"reply-{uuid4().hex}.mp3"
                 path.write_bytes(data)
                 self.audio = str(path)
+                self.audio_status = "complete"
             except (SpeechError, OSError) as error:
+                self.audio_status = "error"
                 self.trace.finish(event_id, failed=True)
                 self.warning = (
                     str(error) if isinstance(error, SpeechError) else "No se pudo guardar el audio."
@@ -562,11 +609,89 @@ class VoiceSession:
             self.latencies["tts_seconds"] = round(perf_counter() - started, 3)
             return self.audio
 
+    def cancel_audio(self):
+        """Cancel the provider read on its own loop, without waiting under a session lock."""
+        if self._audio_task and not self._audio_task.done():
+            self._audio_loop.call_soon_threadsafe(self._audio_task.cancel)
+        self._audio_task = self._audio_loop = None
+
+    def interrupt_audio(self, audio_id):
+        with self._audio_lock:
+            if not self.audio or Path(self.audio).name != audio_id:
+                raise VoiceInputError("Ese audio ya no corresponde a la respuesta actual.")
+            self.cancel_audio()
+            self.interrupted_audio = self.audio
+            self.played_audio = None
+            self.audio_status = "interrupted"
+            self.warning = "Mensaje interrumpido. Puedes responder; para confirmar una oferta debes escucharla completa."
+
+    def claim_audio(self, audio_id):
+        with self._audio_lock:
+            if (
+                not self.audio
+                or Path(self.audio).name != audio_id
+                or self.audio_status != "pending"
+            ):
+                raise VoiceInputError("Audio en uso o interrumpido. Usa Reintentar audio.")
+            self.audio_status = "streaming"
+
+    async def stream_audio(self, audio_id):
+        path = self.directory / audio_id
+        partial = path.with_suffix(".part")
+        started = perf_counter()
+        event_id = self.trace.start("text_to_speech", kind="speech")
+        success = False
+        with self._audio_lock:
+            if self.audio != str(path) or self.audio_status != "streaming":
+                self.trace.finish(event_id, failed=True)
+                return
+            self._audio_task = asyncio.current_task()
+            self._audio_loop = asyncio.get_running_loop()
+            text = self.reply["text"]
+        try:
+            async with aclosing(self.speech.stream_synthesize(text)) as source:
+                with partial.open("wb") as output:
+                    async for chunk in source:
+                        with self._audio_lock:
+                            if self.audio != str(path) or self.audio_status != "streaming":
+                                return
+                        if not output.tell():
+                            self.latencies["tts_first_chunk_seconds"] = round(
+                                perf_counter() - started, 3
+                            )
+                        output.write(chunk)
+                        yield chunk
+                    if not output.tell() or output.tell() % 2:
+                        raise SpeechError("El audio llegó incompleto. Usa Reintentar audio.")
+            with self._audio_lock:
+                if self.audio == str(path) and self.audio_status == "streaming":
+                    partial.replace(path)
+                    self.audio_status = "complete"
+                    success = True
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - sanitize failures after streaming headers
+            # Errors after response headers must never expose provider bodies or secrets.
+            success = False
+        finally:
+            partial.unlink(missing_ok=True)
+            self.trace.finish(event_id, failed=not success)
+            with self._audio_lock:
+                if self.audio == str(path):
+                    self._audio_task = self._audio_loop = None
+                    self.latencies["tts_seconds"] = round(perf_counter() - started, 3)
+                    if self.audio_status == "streaming":
+                        self.audio_status = "error"
+                        self.warning = (
+                            "El audio no terminó. El turno está guardado; usa Reintentar audio."
+                        )
+
     def details(self):
         return {
             "stage": self.reply["stage"] if self.reply else "not_started",
             "offer_id": self.reply.get("offer_id") if self.reply else None,
             "agreement_id": self.reply.get("agreement_id") if self.reply else None,
             "latency": dict(self.latencies),
+            "audio_status": self.audio_status,
             "playback_check": "browser ended event; no audibility verification",
         }

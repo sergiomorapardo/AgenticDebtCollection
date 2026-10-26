@@ -32,7 +32,7 @@ def test_speech_requests_use_expected_host_models_and_secret_header(tmp_path):
     assert speech.synthesize("Hola") == b"ID3-audio"
     audio = tmp_path / "recording.wav"
     audio.write_bytes(b"fictional-audio")
-    assert speech.transcribe(audio) == "quiero tres cuotas"
+    assert speech.transcribe(audio) == "quiero 3 cuotas"
     assert len(seen) == 2
 
 
@@ -91,6 +91,275 @@ class FakeSpeech:
     def transcribe(self, path):
         self.transcriptions.append(path)
         return "confirmo"
+
+
+class StreamingSpeech(FakeSpeech):
+    async def stream_synthesize(self, text):
+        self.calls.append(text)
+        yield b"\x01\x00"
+        if self.fail:
+            raise SpeechError("private upstream failure")
+        yield b"\x02\x00"
+
+
+def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
+    import asyncio
+
+    closed = []
+
+    class Chunks(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"\x01\x00"
+            raise AssertionError("Consumer must not buffer the whole response")
+
+        async def aclose(self):
+            closed.append(True)
+
+    def handle(request):
+        assert request.url.path.endswith("/voice-id/stream")
+        assert request.url.params["output_format"] == "pcm_24000"
+        payload = json.loads(request.content)
+        assert payload["model_id"] == "eleven_flash_v2_5"
+        assert payload["text"] == "600000 pesos colombianos"
+        return httpx.Response(200, stream=Chunks(), headers={"content-type": "audio/pcm"})
+
+    async def run():
+        speech = ElevenLabsSpeech("test-key", "voice-id", transport=httpx.MockTransport(handle))
+        source = speech.stream_synthesize("600,000 COP")
+        assert await anext(source) == b"\x01\x00"
+        await source.aclose()
+
+    asyncio.run(run())
+    assert closed == [True]
+
+
+def test_streaming_api_replays_completed_audio_without_charges(session, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from collections_lab.channels.voice_app import create_app
+
+    speech = StreamingSpeech()
+    with TestClient(
+        create_app(speech, data_dir=tmp_path / "stream-api", now=session.context.now),
+        base_url="http://127.0.0.1",
+    ) as client:
+        client.get("/")
+        state = api_post(client, "start").json()
+        assert state["audio_format"] == "pcm_s16le_24000" and not speech.calls
+        assert (
+            api_post(
+                client, "playback", state=state, payload={"audio_id": state["audio_id"]}
+            ).status_code
+            == 400
+        )
+        assert client.get(state["audio_url"]).content == b"\x01\x00\x02\x00"
+        assert client.get(state["audio_url"]).content == b"\x01\x00\x02\x00"
+        assert len(speech.calls) == 1
+        assert finish_playback(client, state)["ready"]
+        assert client.get("/api/session").json()["details"]["audio_status"] == "complete"
+
+
+def test_partial_stream_cannot_acknowledge_or_implicitly_retry(session, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from collections_lab.channels.voice_app import create_app
+
+    speech = StreamingSpeech()
+    speech.fail = True
+    with TestClient(
+        create_app(speech, data_dir=tmp_path / "stream-api", now=session.context.now),
+        base_url="http://127.0.0.1",
+    ) as client:
+        client.get("/")
+        state = api_post(client, "start").json()
+        assert client.get(state["audio_url"]).content == b"\x01\x00"
+        current = client.get("/api/session").json()
+        assert current["details"]["audio_status"] == "error"
+        assert "private" not in json.dumps(current)
+        assert (
+            api_post(
+                client, "playback", state=state, payload={"audio_id": state["audio_id"]}
+            ).status_code
+            == 400
+        )
+        assert client.get(state["audio_url"]).status_code == 409
+        assert len(speech.calls) == 1
+        recovered = api_post(client, "retry", state=state).json()
+        assert recovered["audio_id"] != state["audio_id"]
+        assert recovered["history"] == state["history"]
+        speech.fail = False
+        assert client.get(recovered["audio_url"]).status_code == 200
+        assert finish_playback(client, recovered)["ready"]
+
+
+def test_interrupted_offer_acceptance_does_not_write_agreement_but_counteroffer_works(session):
+    from pathlib import Path
+
+    offer(session)
+    session.interrupt_audio(Path(session.audio).name)
+    assert not session.acknowledge_playback(session.audio)
+    session.send("confirmo")
+    assert not session.context.repository.agreements()
+    assert session.context.offer_audio_completed is False
+    session.interrupt_audio(Path(session.audio).name)
+    reply = session.send("quiero 2 cuotas desde 2026-10-21")
+    assert reply["stage"] == "awaiting_confirmation"
+    assert session.acknowledge_playback(session.audio)
+    session.send("confirmo")
+    assert len(session.context.repository.agreements()) == 1
+
+
+def test_playing_history_does_not_acknowledge_an_interrupted_offer(session):
+    from pathlib import Path
+
+    offer(session)
+    session.interrupt_audio(Path(session.audio).name)
+    session.send("qué acordamos antes")
+    assert session.acknowledge_playback(session.audio)
+    session.send("confirmo")
+    assert session.context.offer_audio_completed is False
+    assert not session.context.repository.agreements()
+
+
+def test_interrupt_cancels_inflight_provider_and_rejects_stale_audio(session):
+    import asyncio
+    from pathlib import Path
+
+    closed = []
+
+    class SlowSpeech(StreamingSpeech):
+        async def stream_synthesize(self, text):
+            try:
+                yield b"\x01\x00"
+                await asyncio.sleep(60)
+            finally:
+                closed.append(True)
+
+    async def run():
+        session.speech = SlowSpeech()
+        session.send("Hola")
+        audio_id = Path(session.audio).name
+        session.claim_audio(audio_id)
+        started = asyncio.Event()
+
+        async def consume():
+            async for _ in session.stream_audio(audio_id):
+                started.set()
+
+        task = asyncio.create_task(consume())
+        await started.wait()
+        with pytest.raises(ValueError):
+            session.claim_audio(audio_id)
+        session.interrupt_audio(audio_id)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert closed == [True]
+        assert session.audio_status == "interrupted"
+        assert not session.acknowledge_playback(audio_id)
+        session.retry_audio()
+        with pytest.raises(ValueError):
+            session.interrupt_audio(audio_id)
+        assert not list(session.directory.glob("*.part"))
+
+    asyncio.run(run())
+
+
+def test_dictated_number_is_normalized_in_saved_transcript(session, monkeypatch):
+    session.send("Hola")
+    session.send("123456789")
+    monkeypatch.setattr(session.speech, "transcribe", lambda _: "uno uno uno uno")
+    session.respond_to_audio("test.wav")
+    assert session.history[-2]["content"] == "1111"
+    assert session.reply["stage"] == "ready"
+
+
+def test_browser_stream_queue_barge_in_and_recording_preroll(tmp_path):
+    """Exercise the shipped browser code with controlled audio/network timing in Node."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required for browser state-machine regression tests")
+    runner = tmp_path / "voice.cjs"
+    runner.write_text(r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const full = html.split('<script>')[1].split('</script>')[0];
+new vm.Script(full); // Also check syntax of the technical viewer.
+const script = full.split('// The viewer')[0].replace('restoreSession();', '');
+function fixture() {
+ const calls=[], nodes=[], timers=new Map(), elements=new Map(); let eof=false, clock=1, rms=0;
+ const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
+ const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
+ class Context {
+  constructor(){this.state='running';this.started=Date.now();}
+  get currentTime(){return (Date.now()-this.started)/1000;}
+  resume(){return Promise.resolve();}close(){return Promise.resolve();}
+  createBuffer(channels,size,rate){return {duration:size/rate,getChannelData:()=>new Float32Array(size)};}
+  createBufferSource(){const n={connect(){},disconnect(){},start(){nodes.push(n);n.timer=setTimeout(()=>n.onended?.(),20);},stop(){n.stopped=true;clearTimeout(n.timer);}};return n;}
+  createMediaStreamSource(){return {connect(){}};}createAnalyser(){return {fftSize:2048,getFloatTimeDomainData(data){data.fill(rms);}};}
+ }
+ class Recorder {
+  static isTypeSupported(){return true;}constructor(){this.state='inactive';}
+  start(){this.state='recording';}stop(){this.state='inactive';setImmediate(()=>this.onstop?.());}
+ }
+ let releaseEnd, aborted=false;
+ const end=new Promise(resolve=>{releaseEnd=()=>{eof=true;resolve({done:true});};});
+ const sandbox={console,document,AudioContext:Context,MediaRecorder:Recorder,Blob,AbortController,Uint8Array,Float32Array,DataView,Date,crypto:require('node:crypto').webcrypto,
+  performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},
+  setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
+  fetch:async(url,options={})=>{
+   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array([0,2,0]),done:false};return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
+   calls.push({url,body:options.body});
+   if(url==='/api/playback')assert.ok(eof,'playback acknowledged before stream EOF');
+   return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
+  }
+ };
+ const context=vm.createContext(sandbox);vm.runInContext(script,context);
+ const run=code=>vm.runInContext(code,context);
+ run("state={session_id:'call',audio_id:'current.pcm',audio_url:'/api/audio/current.pcm',audio_format:'pcm_s16le_24000',finished:false,history:[]};epoch=1;");
+ return {run,calls,nodes,releaseEnd,get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();}};
+}
+const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out');};
+(async()=>{
+ const first=fixture();const playing=first.run('playResponse(epoch)');
+ await until(()=>first.nodes.length>0);
+ assert.equal(first.calls.length,0); // The first fragment is scheduled before network EOF.
+ await first.run('prepareMic()');
+ first.run("capture.recorder.ondataavailable({data:new Blob(['initial syllable'])});");
+ first.tick(.1);first.tick(.1);first.tick(.1); // Sustained voice, not a button click.
+ assert.equal(first.run('mode'),'recording');
+ assert.ok(first.nodes.every(node=>node.stopped));
+ await playing;assert.ok(first.aborted);
+ first.run('finishRecording()');
+ await until(()=>first.calls.some(call=>call.url==='/api/recording'));
+ assert.equal(await first.calls.find(call=>call.url==='/api/recording').body.text(),'initial syllable');
+ assert.equal(first.calls.filter(call=>call.url==='/api/interrupt').length,1);
+ assert.equal(first.calls.filter(call=>call.url==='/api/playback').length,0);
+ first.run('releaseMic();stopPlayback();');
+ const second=fixture();const complete=second.run('playResponse(epoch)');
+ await until(()=>second.nodes.length>0);second.releaseEnd();await complete;
+ assert.equal(second.calls.filter(call=>call.url==='/api/playback').length,1);
+ assert.equal(second.run('mode'),'ready');second.run('releaseMic();stopPlayback();');
+ console.log('PCM early playback, odd-byte boundaries, VAD interruption, queue cancellation, pre-roll, EOF acknowledgement: passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+    result = subprocess.run(
+        [
+            node,
+            str(runner),
+            str(Path(__file__).parents[1] / "src/collections_lab/channels/voice.html"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.fixture

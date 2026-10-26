@@ -18,6 +18,7 @@ class AppContext:
     provider: str = "mock"
     model: str = "claude-haiku-4-5-20251001"
     stream_responses: bool = False
+    offer_audio_completed: bool = True
 
     @property
     def today(self):
