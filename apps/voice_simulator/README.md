@@ -5,6 +5,9 @@ The server reuses the existing conversational graph and ElevenLabs adapters; cre
 remain on the server. No frontend framework, asset CDN, or separate frontend build is required.
 The interface uses translucent surfaces, a call timer, microphone/hangup controls, automatic
 response playback, and an optional transcript with typed replies.
+**Vista Glass** toggles a dark blue/green glass appearance while keeping the same call,
+transcript, and optional technical viewer. The original light view is the default. The choice
+is saved in browser local storage when available; changing it never restarts the call.
 
 ```mermaid
 sequenceDiagram
@@ -49,6 +52,10 @@ available to your account through the API. Defaults are `scribe_v2` and
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 The browser uses Web Audio and fetch streaming; it does not download/decode a complete MP3.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
+Both speech paths render `COP` as `pesos` (`1 COP` as `1 peso`) only in the provider request:
+`600,000 COP` stays written in the conversation while speech receives `600000 pesos`.
+Grouping separators in currency amounts are removed for Spanish pronunciation. Persisted
+responses, transcripts, and business amounts retain their original representation.
 
 For interpretation with Claude Haiku, set `ANTHROPIC_API_KEY` and run:
 

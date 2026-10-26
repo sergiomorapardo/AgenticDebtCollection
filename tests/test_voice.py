@@ -413,7 +413,7 @@ const script = full.split('// The viewer')[0].replace('restoreSession();', '');
 function fixture(readFailure=false,interruptFailure=false,short=false,odd=false) {
  const calls=[], nodes=[], timers=new Map(), elements=new Map(); let eof=false, clock=1, rms=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
- const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
+ const document={documentElement:{dataset:{}},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
  class Context {
   constructor(){this.state='running';this.started=Date.now();}
   get currentTime(){return (Date.now()-this.started)/1000;}
