@@ -1022,3 +1022,32 @@ def test_morning_remark_preserves_non_date_intent(model_call, stage, intent, tex
     assert result.status == "classified" and result.turn.intent == intent
     assert result.turn.payment_date is None and result.turn.date_clarification is None
     assert result.turn.acceptance == acceptance
+
+
+@pytest.mark.parametrize(
+    "contact", ["ana@example.com", "https://example.com/private", "www.example.com/private"]
+)
+def test_legacy_pending_date_quote_is_redacted_before_model_call(model_call, contact):
+    calls, response = model_call
+    response["result"] = {"intent": "unclear"}
+    result = understand_turn(
+        "2026",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="awaiting_terms",
+        context={
+            "dialogue": {
+                "awaiting": "date",
+                "pending_date": {
+                    "quote": f"20 de octubre, escríbeme en {contact}",
+                    "day": 20,
+                    "month": 10,
+                },
+            }
+        },
+    )
+    assert result.status == "classified" and result.turn.payment_date == date(2026, 10, 20)
+    payload = json.loads(calls[0][1][1])
+    pending = payload["backend_context"]["dialogue"]["pending_date"]
+    assert contact not in calls[0][1][1] and "[redacted]" in pending["quote"]
+    assert pending["day"] == 20 and pending["month"] == 10

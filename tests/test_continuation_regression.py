@@ -652,3 +652,23 @@ def test_time_of_day_remark_does_not_discard_confirmed_calendar(date_conversatio
     ctx.provider = "anthropic"
     reply = send("Sí, confirmo, lo pago en la mañana")
     assert reply["stage"] == "agreed" and len(ctx.repository.agreements()) == 1
+
+
+def test_unsupported_date_does_not_store_or_resend_contacts(date_conversation, monkeypatch):
+    send, ctx, sid = date_conversation()
+    send("quiero 3 cuotas")
+    captured = []
+    model_stub(
+        monkeypatch, {"intent": "unclear", "date_reference": {"quote": "ultimo dia"}}, captured
+    )
+    ctx.provider = "anthropic"
+    question = send("a fin de mes, escríbeme a ana@example.com o https://example.com/privado")
+    assert question["offer_id"] is None
+    pending = ctx.repository.get_session(sid)["dialogue"]["pending_date"]
+    assert "example.com" not in pending["quote"] and "[redacted]" in pending["quote"]
+    model_stub(monkeypatch, {"intent": "unclear"}, captured)
+    proposal = send("el 20 de octubre del 2026")
+    assert len(captured) == 2 and "example.com" not in json.dumps(captured)
+    assert "[redacted]" in captured[1]["backend_context"]["dialogue"]["pending_date"]["quote"]
+    assert proposal["stage"] == "awaiting_confirmation" and "200,000 COP" in proposal["text"]
+    assert not ctx.repository.agreements()

@@ -325,6 +325,9 @@ def _ground_payment_date(turn, text, today, stage, context):
         )
     elif turn.intent in {"accept_offer", "continue"}:
         updates["intent"] = "unclear"
+    updates["date_reference"] = reference.model_copy(
+        update={"quote": _redact_contacts(reference.quote)[:160]}
+    )
     return turn.model_copy(update=updates)
 
 
@@ -519,6 +522,9 @@ def _backend_facts(context: dict | None) -> dict:
             selected["pending_date"] = PaymentDateReference.model_validate(
                 value["pending_date"]
             ).model_dump(mode="json")
+            selected["pending_date"]["quote"] = _redact_contacts(selected["pending_date"]["quote"])[
+                :160
+            ]
         result[key] = selected
     return result
 
