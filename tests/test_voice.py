@@ -351,7 +351,7 @@ const html = fs.readFileSync(process.argv[2], 'utf8');
 const full = html.split('<script>')[1].split('</script>')[0];
 new vm.Script(full); // Also check syntax of the technical viewer.
 const script = full.split('// The viewer')[0].replace('restoreSession();', '');
-function fixture(readFailure=false,interruptFailure=false) {
+function fixture(readFailure=false,interruptFailure=false,short=false,odd=false) {
  const calls=[], nodes=[], timers=new Map(), elements=new Map(); let eof=false, clock=1, rms=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
  const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
@@ -359,8 +359,8 @@ function fixture(readFailure=false,interruptFailure=false) {
   constructor(){this.state='running';this.started=Date.now();}
   get currentTime(){return (Date.now()-this.started)/1000;}
   resume(){return Promise.resolve();}close(){return Promise.resolve();}
-  createBuffer(channels,size,rate){return {duration:size/rate,getChannelData:()=>new Float32Array(size)};}
-  createBufferSource(){const n={connect(){},disconnect(){},start(){nodes.push(n);n.timer=setTimeout(()=>n.onended?.(),20);},stop(){n.stopped=true;clearTimeout(n.timer);}};return n;}
+  createBuffer(channels,size,rate){const samples=new Float32Array(size);return {duration:size/rate,getChannelData:()=>samples};}
+  createBufferSource(){const context=this,n={connect(){},disconnect(){},start(when){n.when=when;nodes.push(n);n.timer=setTimeout(()=>{n.ended=true;n.onended?.();},(when-context.currentTime+n.buffer.duration)*1000);},stop(){n.stopped=true;clearTimeout(n.timer);}};return n;}
   createMediaStreamSource(){return {connect(){}};}createAnalyser(){return {fftSize:2048,getFloatTimeDomainData(data){data.fill(rms);}};}
  }
  class Recorder {
@@ -373,10 +373,10 @@ function fixture(readFailure=false,interruptFailure=false) {
   performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},
   setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
   fetch:async(url,options={})=>{
-   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array([0,2,0]),done:false};if(readFailure)throw new Error('truncated stream');return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
+   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array(odd?[0,2]:[0,2,0]),done:false};if(index===3&&!short)return {value:new Uint8Array(9600).fill(3),done:false};if(readFailure)throw new Error('truncated stream');return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
    calls.push({url,body:options.body,headers:options.headers});
    if(url==='/api/interrupt'&&interruptFailure){interruptFailure=false;return {ok:false,json:async()=>({detail:'temporary interrupt error'})};}
-   if(url==='/api/playback')assert.ok(eof,'playback acknowledged before stream EOF');
+   if(url==='/api/playback'){assert.ok(eof,'playback acknowledged before stream EOF');assert.ok(nodes.every(node=>node.ended),'playback acknowledged before scheduled speech ended');}
    return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
   }
  };
@@ -388,8 +388,14 @@ function fixture(readFailure=false,interruptFailure=false) {
 const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out');};
 (async()=>{
  const first=fixture();const playing=first.run('playResponse(epoch)');
- await until(()=>first.nodes.length>0);
+ await until(()=>first.nodes.length===2);
  assert.equal(first.calls.length,0); // The first fragment is scheduled before network EOF.
+ const initial=first.nodes[0].buffer.getChannelData(0);
+ assert.equal(initial.length,6000);assert.ok(initial.slice(0,3600).every(sample=>sample===0));
+ assert.equal(initial[3600],1/32768);assert.equal(initial[3601],2/32768);
+ assert.ok(initial.slice(3602).every(sample=>sample===771/32768));
+ assert.equal(first.nodes[1].buffer.getChannelData(0).length,2400); // Silence only at the start.
+ assert.equal(first.nodes[1].when,first.nodes[0].when+first.nodes[0].buffer.duration);
  await first.run('prepareMic()');
  first.run("capture.recorder.ondataavailable({data:new Blob(['initial syllable'])});");
  first.tick(.1);first.tick(.1);first.tick(.1); // Sustained voice, not a button click.
@@ -404,12 +410,25 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  first.run('releaseMic();stopPlayback();');
  const second=fixture();const complete=second.run('playResponse(epoch)');
  await until(()=>second.nodes.length>0);second.releaseEnd();await complete;
+ const speech=second.nodes.flatMap((node,index)=>Array.from(node.buffer.getChannelData(0)).slice(index===0?3600:0));
+ assert.equal(speech.length,4802);assert.deepEqual(speech.slice(0,2),[1/32768,2/32768]);
+ assert.ok(speech.slice(2).every(sample=>sample===771/32768)); // No discarded/repeated samples across frames or EOF.
  assert.equal(second.calls.filter(call=>call.url==='/api/playback').length,1);
  assert.equal(second.run('mode'),'ready');second.run('releaseMic();stopPlayback();');
  const broken=fixture(true);await broken.run('playResponse(epoch)');
  assert.equal(broken.calls.filter(call=>call.url==='/api/playback').length,0);
  assert.ok(broken.nodes.every(node=>node.stopped));assert.equal(broken.run('mode'),'waiting');
  broken.run('releaseMic();stopPlayback();');
+ const tiny=fixture(false,false,true);const tinyPlaying=tiny.run('playResponse(epoch)');
+ await new Promise(resolve=>setTimeout(resolve,20));assert.equal(tiny.nodes.length,0);
+ tiny.releaseEnd();await tinyPlaying;
+ assert.equal(tiny.nodes.length,1);assert.equal(tiny.nodes[0].buffer.getChannelData(0).length,3602);
+ assert.deepEqual(Array.from(tiny.nodes[0].buffer.getChannelData(0)).slice(3600),[1/32768,2/32768]);
+ tiny.run('releaseMic();stopPlayback();');
+ const malformed=fixture(false,false,true,true);const malformedPlaying=malformed.run('playResponse(epoch)');
+ malformed.releaseEnd();await malformedPlaying;
+ assert.equal(malformed.nodes.length,0);assert.equal(malformed.calls.length,0);assert.equal(malformed.run('mode'),'waiting');
+ malformed.run('releaseMic();stopPlayback();');
  const retry=fixture(false,true);const retryPlaying=retry.run('playResponse(epoch)');
  await until(()=>retry.nodes.length>0);await retry.run('prepareMic()');
  retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();");

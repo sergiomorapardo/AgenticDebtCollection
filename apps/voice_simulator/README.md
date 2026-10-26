@@ -222,6 +222,12 @@ The browser state-machine regression uses Node when available and exercises PCM 
 before EOF, odd-byte chunk boundaries, speech interruption, queued-source cancellation,
 recording pre-roll, and acknowledgment only after complete playback. API tests cover partial
 streams, explicit retries, cancellation cleanup, and interrupted-offer acceptance protection.
+PCM playback groups network fragments into 100 ms frames and prefixes the first frame with
+150 ms of silence to give the output device time to start without consuming the first word.
+Every original speech sample is retained, including utterances shorter than one frame and
+the final partial frame. The silent prefix is interruptible with the rest of the queue.
+This adds a small startup delay; physical speaker/headset acceptance remains necessary,
+especially for Bluetooth routes whose activation delay can vary.
 Partial provider failures abort the HTTP body, so the browser clears queued audio without
 acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
 still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
