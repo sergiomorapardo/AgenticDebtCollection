@@ -12,17 +12,119 @@ class SpeechError(RuntimeError):
     """A speech request failed without exposing provider payloads or credentials."""
 
 
+def _spanish_integer(value: int) -> str:
+    """Spell non-negative integers before masculine currency/scale nouns."""
+    small = (
+        "cero",
+        "un",
+        "dos",
+        "tres",
+        "cuatro",
+        "cinco",
+        "seis",
+        "siete",
+        "ocho",
+        "nueve",
+        "diez",
+        "once",
+        "doce",
+        "trece",
+        "catorce",
+        "quince",
+        "dieciséis",
+        "diecisiete",
+        "dieciocho",
+        "diecinueve",
+        "veinte",
+        "veintiún",
+        "veintidós",
+        "veintitrés",
+        "veinticuatro",
+        "veinticinco",
+        "veintiséis",
+        "veintisiete",
+        "veintiocho",
+        "veintinueve",
+    )
+    if not 0 <= value < 10**18:
+        raise SpeechError("El importe supera el rango admitido para pronunciación.")
+    if value < 30:
+        return small[value]
+    if value < 100:
+        tens, units = divmod(value, 10)
+        word = (
+            "",
+            "",
+            "",
+            "treinta",
+            "cuarenta",
+            "cincuenta",
+            "sesenta",
+            "setenta",
+            "ochenta",
+            "noventa",
+        )[tens]
+        return word + (f" y {small[units]}" if units else "")
+    if value == 100:
+        return "cien"
+    if value < 1000:
+        hundreds, remainder = divmod(value, 100)
+        word = (
+            "",
+            "ciento",
+            "doscientos",
+            "trescientos",
+            "cuatrocientos",
+            "quinientos",
+            "seiscientos",
+            "setecientos",
+            "ochocientos",
+            "novecientos",
+        )[hundreds]
+        return word + (f" {_spanish_integer(remainder)}" if remainder else "")
+    for scale, singular, plural in (
+        (10**12, "billón", "billones"),
+        (10**6, "millón", "millones"),
+        (1000, "mil", "mil"),
+    ):
+        if value >= scale:
+            count, remainder = divmod(value, scale)
+            word = (
+                "mil"
+                if scale == 1000 and count == 1
+                else f"{_spanish_integer(count)} {singular if count == 1 else plural}"
+            )
+            return word + (f" {_spanish_integer(remainder)}" if remainder else "")
+    raise AssertionError("Unreachable integer range")
+
+
+def _spoken_currency(raw: str) -> str:
+    if re.fullmatch(r"\d{1,3}([.,])\d{3}(?:\1\d{3})*", raw):
+        raw = raw.replace(",", "").replace(".", "")
+    decimal = re.fullmatch(r"(\d+)[.,](\d{1,2})", raw)
+    if decimal:
+        whole, fraction = decimal.groups()
+        cents = int(fraction.ljust(2, "0"))
+    elif raw.isdecimal():
+        whole, cents = raw, 0
+    else:
+        raise SpeechError("El formato del importe es ambiguo para pronunciación.")
+    value = int(whole)
+    noun = "peso" if value == 1 else "pesos"
+    link = " de" if value and value % 10**6 == 0 else ""
+    words = f"{_spanish_integer(value)}{link} {noun}"
+    if cents:
+        words += f" con {_spanish_integer(cents)} {'centavo' if cents == 1 else 'centavos'}"
+    return words
+
+
 def _spoken_text(text: str) -> str:
     """Render COP naturally only at the speech boundary, retaining written responses."""
     if not text.strip() or len(text) > 4000:
         raise SpeechError("La respuesta debe tener entre 1 y 4000 caracteres.")
 
     def amount(match: re.Match) -> str:
-        value = match[1]
-        # The backend uses integer pesos; consistent three-digit groups are thousands.
-        if re.fullmatch(r"\d{1,3}([.,])\d{3}(?:\1\d{3})*", value):
-            value = value.replace(",", "").replace(".", "")
-        return f"{value} {'peso' if value == '1' else 'pesos'}"
+        return _spoken_currency(match[1])
 
     text = re.sub(r"(?<![\w.,])\$?(\d+(?:[.,]\d+)*)\s+COP\b", amount, text, flags=re.IGNORECASE)
     text = re.sub(r"\bCOP\s+\$?(\d+(?:[.,]\d+)*)", amount, text, flags=re.IGNORECASE)

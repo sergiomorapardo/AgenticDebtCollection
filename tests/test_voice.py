@@ -120,7 +120,7 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         assert request.url.params["output_format"] == "pcm_24000"
         payload = json.loads(request.content)
         assert payload["model_id"] == "eleven_multilingual_v2"
-        assert payload["text"] == "600000 pesos"
+        assert payload["text"] == "seiscientos mil pesos"
         return httpx.Response(200, stream=Chunks(), headers={"content-type": "audio/pcm"})
 
     async def run():
@@ -136,18 +136,30 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
 @pytest.mark.parametrize(
     ("written", "spoken"),
     [
-        ("El saldo es 600,000 COP.", "El saldo es 600000 pesos."),
-        ("Puedes pagar 600000 COP.", "Puedes pagar 600000 pesos."),
-        ("Saldo: $600.000 COP.", "Saldo: 600000 pesos."),
-        ("Total: COP 1,200,000.", "Total: 1200000 pesos."),
-        ("1 COP y 20 cop.", "1 peso y 20 pesos."),
-        ("200000 COP 3 cuotas", "200000 pesos 3 cuotas"),
+        ("El saldo es 600,000 COP.", "El saldo es seiscientos mil pesos."),
+        ("Puedes pagar 600000 COP.", "Puedes pagar seiscientos mil pesos."),
+        ("Saldo: $600.000 COP.", "Saldo: seiscientos mil pesos."),
+        ("Total: COP 1,200,000.", "Total: un millón doscientos mil pesos."),
+        ("1 COP y 20 cop.", "un peso y veinte pesos."),
+        ("200000 COP 3 cuotas", "doscientos mil pesos 3 cuotas"),
         ("Importes en COP; COPIA del acuerdo.", "Importes en pesos; COPIA del acuerdo."),
-        ("Saldo: 12,50 COP.", "Saldo: 12,50 pesos."),
-        ("Saldo: 1.000 COP.", "Saldo: 1000 pesos."),
-        ("Saldo: $1 COP.", "Saldo: 1 peso."),
-        ("Saldo: 12,50 cop.", "Saldo: 12,50 pesos."),
-        ("Cuota 200\u00a0COP el 2026-10-20.", "Cuota 200 pesos el 2026-10-20."),
+        ("0 COP", "cero pesos"),
+        ("21 COP", "veintiún pesos"),
+        ("31 COP", "treinta y un pesos"),
+        ("100 COP", "cien pesos"),
+        ("101 COP", "ciento un pesos"),
+        ("1001 COP", "mil un pesos"),
+        ("1000000 COP", "un millón de pesos"),
+        ("21000000 COP", "veintiún millones de pesos"),
+        ("1000000000 COP", "mil millones de pesos"),
+        ("1000000000000 COP", "un billón de pesos"),
+        ("1,01 COP", "un peso con un centavo"),
+        ("600.000 COP y 200.000 COP", "seiscientos mil pesos y doscientos mil pesos"),
+        ("Saldo: 12,50 COP.", "Saldo: doce pesos con cincuenta centavos."),
+        ("Saldo: 1.000 COP.", "Saldo: mil pesos."),
+        ("Saldo: $1 COP.", "Saldo: un peso."),
+        ("Saldo: 12,50 cop.", "Saldo: doce pesos con cincuenta centavos."),
+        ("Cuota 200\u00a0COP el 2026-10-20.", "Cuota doscientos pesos el 2026-10-20."),
     ],
 )
 def test_currency_is_spoken_as_pesos_in_both_adapters(written, spoken):
@@ -167,6 +179,24 @@ def test_currency_is_spoken_as_pesos_in_both_adapters(written, spoken):
 
     assert asyncio.run(consume()) == b"\x01\x00"
     assert seen == [spoken, spoken]
+
+
+def test_spoken_integer_amounts_round_trip_through_independent_number_parser():
+    from agents.collections.numbers import number_value
+    from collections_lab.channels.elevenlabs import _spanish_integer
+
+    for value in [*range(1000), 1001, 21000, 101001, 600000, 1000001, 2000021, 999999999]:
+        assert number_value(_spanish_integer(value)) == value
+
+
+@pytest.mark.parametrize("written", ["1.234.56 COP", "1000000000000000000 COP"])
+def test_ambiguous_or_unsupported_currency_fails_before_paid_request(written):
+    def handle(request):
+        raise AssertionError("Unsupported amounts must not reach the provider")
+
+    speech = ElevenLabsSpeech("test-key", "voice-id", transport=httpx.MockTransport(handle))
+    with pytest.raises(SpeechError):
+        speech.synthesize(written)
 
 
 def test_spoken_currency_does_not_change_written_offer_or_history(session):
@@ -190,7 +220,7 @@ def test_spoken_currency_does_not_change_written_offer_or_history(session):
         return b"".join([chunk async for chunk in session.stream_audio(audio_id)])
 
     assert asyncio.run(consume()) == b"\x01\x00"
-    assert "200000 pesos" in sent[0] and "COP" not in sent[0]
+    assert "doscientos mil pesos" in sent[0] and "COP" not in sent[0]
     assert json.dumps({"reply": session.reply, "history": session.history}) == written
     assert not session.context.repository.agreements()
 
