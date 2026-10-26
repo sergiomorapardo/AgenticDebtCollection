@@ -12,6 +12,25 @@ class SpeechError(RuntimeError):
     """A speech request failed without exposing provider payloads or credentials."""
 
 
+def _spoken_text(text: str) -> str:
+    """Render COP naturally only at the speech boundary, retaining written responses."""
+    if not text.strip() or len(text) > 4000:
+        raise SpeechError("La respuesta debe tener entre 1 y 4000 caracteres.")
+
+    def amount(match: re.Match) -> str:
+        value = match[1]
+        if re.fullmatch(r"\d{1,3}([.,])\d{3}(?:\1\d{3})*", value):
+            value = value.replace(",", "").replace(".", "")
+        return f"{value} {'peso' if value == '1' else 'pesos'}"
+
+    text = re.sub(r"(?<![\w.,])\$?(\d+(?:[.,]\d+)*)\s+COP\b", amount, text, flags=re.IGNORECASE)
+    text = re.sub(r"\bCOP\s+\$?(\d+(?:[.,]\d+)*)", amount, text, flags=re.IGNORECASE)
+    text = re.sub(r"\bCOP\b", "pesos", text, flags=re.IGNORECASE)
+    if len(text) > 4000:
+        raise SpeechError("La respuesta hablada supera los 4000 caracteres.")
+    return text
+
+
 class ElevenLabsSpeech:
     def __init__(self, api_key: str, voice_id: str, *, transport=None):
         if not api_key or not re.fullmatch(r"[A-Za-z0-9_-]+", voice_id):
@@ -42,8 +61,7 @@ class ElevenLabsSpeech:
             raise SpeechError("No se pudo conectar con ElevenLabs. Puedes reintentar.") from None
 
     def synthesize(self, text: str) -> bytes:
-        if not text.strip() or len(text) > 4000:
-            raise SpeechError("La respuesta debe tener entre 1 y 4000 caracteres.")
+        text = _spoken_text(text)
         response = self._request(
             f"text-to-speech/{self.voice_id}",
             params={"output_format": "mp3_44100_128"},
@@ -58,14 +76,7 @@ class ElevenLabsSpeech:
 
     async def stream_synthesize(self, text: str):
         """Yield mono signed 16-bit little-endian PCM at 24 kHz without buffering an MP3."""
-        if not text.strip() or len(text) > 4000:
-            raise SpeechError("La respuesta debe tener entre 1 y 4000 caracteres.")
-        # Deterministic backend amounts use English grouping; remove it before Spanish TTS.
-        text = re.sub(
-            r"\b(\d{1,3}(?:,\d{3})+) COP\b",
-            lambda m: m[1].replace(",", "") + " pesos colombianos",
-            text,
-        )
+        text = _spoken_text(text)
         try:
             async with (
                 httpx.AsyncClient(

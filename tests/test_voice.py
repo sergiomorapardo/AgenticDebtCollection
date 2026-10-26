@@ -120,7 +120,7 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         assert request.url.params["output_format"] == "pcm_24000"
         payload = json.loads(request.content)
         assert payload["model_id"] == "eleven_flash_v2_5"
-        assert payload["text"] == "600000 pesos colombianos"
+        assert payload["text"] == "600000 pesos"
         return httpx.Response(200, stream=Chunks(), headers={"content-type": "audio/pcm"})
 
     async def run():
@@ -131,6 +131,65 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
 
     asyncio.run(run())
     assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("written", "spoken"),
+    [
+        ("El saldo es 600,000 COP.", "El saldo es 600000 pesos."),
+        ("Puedes pagar 600000 COP.", "Puedes pagar 600000 pesos."),
+        ("Saldo: $600.000 COP.", "Saldo: 600000 pesos."),
+        ("Total: COP 1,200,000.", "Total: 1200000 pesos."),
+        ("1 COP y 20 cop.", "1 peso y 20 pesos."),
+        ("200000 COP 3 cuotas", "200000 pesos 3 cuotas"),
+        ("Importes en COP; COPIA del acuerdo.", "Importes en pesos; COPIA del acuerdo."),
+        ("Saldo: 12,50 COP.", "Saldo: 12,50 pesos."),
+        ("Cuota 200\u00a0COP el 2026-10-20.", "Cuota 200 pesos el 2026-10-20."),
+    ],
+)
+def test_currency_is_spoken_as_pesos_in_both_adapters(written, spoken):
+    import asyncio
+
+    seen = []
+
+    def handle(request):
+        seen.append(json.loads(request.content)["text"])
+        return httpx.Response(200, content=b"\x01\x00", headers={"content-type": "audio/pcm"})
+
+    speech = ElevenLabsSpeech("test-key", "voice-id", transport=httpx.MockTransport(handle))
+    speech.synthesize(written)
+
+    async def consume():
+        return b"".join([chunk async for chunk in speech.stream_synthesize(written)])
+
+    assert asyncio.run(consume()) == b"\x01\x00"
+    assert seen == [spoken, spoken]
+
+
+def test_spoken_currency_does_not_change_written_offer_or_history(session):
+    import asyncio
+    from pathlib import Path
+
+    offer(session)
+    written = json.dumps({"reply": session.reply, "history": session.history})
+    assert "200,000 COP" in written
+    sent = []
+
+    def handle(request):
+        sent.append(json.loads(request.content)["text"])
+        return httpx.Response(200, content=b"\x01\x00", headers={"content-type": "audio/pcm"})
+
+    session.speech = ElevenLabsSpeech("test-key", "voice-id", transport=httpx.MockTransport(handle))
+    audio_id = Path(session.retry_audio()).name
+    session.claim_audio(audio_id)
+
+    async def consume():
+        return b"".join([chunk async for chunk in session.stream_audio(audio_id)])
+
+    assert asyncio.run(consume()) == b"\x01\x00"
+    assert "200000 pesos" in sent[0] and "COP" not in sent[0]
+    assert json.dumps({"reply": session.reply, "history": session.history}) == written
+    assert not session.context.repository.agreements()
 
 
 def test_streaming_api_replays_completed_audio_without_charges(session, tmp_path):
