@@ -612,9 +612,11 @@ class VoiceSession:
 
     def cancel_audio(self):
         """Cancel the provider read on its own loop, without waiting under a session lock."""
-        if self._audio_task and not self._audio_task.done():
-            self._audio_loop.call_soon_threadsafe(self._audio_task.cancel)
-        self._audio_task = self._audio_loop = None
+        with self._audio_lock:
+            # Keep the task/loop pair stable while stream finalization runs on another thread.
+            if self._audio_task and not self._audio_task.done():
+                self._audio_loop.call_soon_threadsafe(self._audio_task.cancel)
+            self._audio_task = self._audio_loop = None
 
     def interrupt_audio(self, audio_id):
         with self._audio_lock:

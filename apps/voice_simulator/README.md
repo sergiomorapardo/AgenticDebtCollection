@@ -229,6 +229,12 @@ still rejecting partial numeric expressions and ranges such as `2-3` as one exac
 Follow-ups: replace the bounded arm-time recording with a codec-safe rolling pre-roll buffer
 to avoid uploading idle silence; calibrate echo/noise thresholds on physical devices; and
 move PCM cache writes off the event loop if concurrent-call measurements justify it.
+Also consolidate the proposal formatter shared in wording by negotiation and confirmation;
+the replay regression currently checks that the complete original proposal is retained.
+Courtesy idiom exemptions are narrow: other cardinal expressions such as `mil veces` become
+`1000 veces`. In identity stages, whitespace-separated single digits are treated as dictation
+(`1 2` → `12`); ambiguous mixed forms such as `doce tres` remain unchanged. Clearing obsolete
+offer playback metadata after a business decline is a cleanup follow-up; it grants no authority.
 
 Live adapter validation for this change synthesized `Uno.` through the PCM endpoint and
 transcribed it as `1`. Claude Haiku returned validated numeric fields for one installment,
