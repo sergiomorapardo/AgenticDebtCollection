@@ -51,12 +51,16 @@ available to your account through the API. Defaults are `scribe_v2` and
 `eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 The browser receives the complete PCM recording, wraps it losslessly in a mono WAV header,
-and plays it through the native audio element, matching the accepted B sample. It adds no
+and plays it through the native audio element, matching the B sample. Once the microphone
+setup and the audio element are ready, a cancellable one-second timer settles before playback.
+It adds no
 tones, silence, or per-frame scheduling. Playback waits for the complete download.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
-Both speech paths render `COP` as `pesos` (`1 COP` as `1 peso`) only in the provider request:
-`600,000 COP` stays written in the conversation while speech receives `600000 pesos`.
-Grouping separators in currency amounts are removed for Spanish pronunciation. Persisted
+Both speech paths render `COP` as `pesos` (`1 COP` as `un peso`) only in the provider request:
+`600,000 COP` stays written in the conversation while speech receives `seiscientos mil pesos`.
+Currency amounts are spelled out deterministically in Spanish, including thousands, millions,
+masculine endings, and cents when explicitly given. Ambiguous separators and amounts outside
+the supported range fail before a paid request instead of guessing a pronunciation. Persisted
 responses, transcripts, and business amounts retain their original representation.
 
 For interpretation with Claude Haiku, set `ANTHROPIC_API_KEY` and run:
@@ -243,7 +247,8 @@ The user requested the same full-file native playback as the Multilingual v2 B s
 fragmented playback, added silence, and a diagnostic tone did not resolve audible clipping.
 The source model and playback mechanism now match that sample; physical acceptance of the
 updated simulator remains necessary. No diagnostic tone is included in the application.
-Initial playback waits for pending microphone setup (grant or denial) to settle. The wait is
+Initial playback waits for pending microphone setup (grant or denial), then for native audio
+readiness and a one-second startup timer requested after physical clipping reports. The wait is
 cancellable by hanging up, and denying the microphone retains typed replies.
 Partial provider failures abort the HTTP body, so the browser rejects incomplete audio without
 acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
