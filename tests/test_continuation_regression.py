@@ -564,3 +564,45 @@ def test_impossible_calendar_date_asks_for_correction(date_conversation):
     assert "no existe" in reply["text"] and reply["offer_id"] is None
     assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
     assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize("text", ["el primero de noviembre del 2026", "el 1 de noviembre del 2026"])
+def test_natural_full_date_preserves_offer_and_requires_confirmation(date_conversation, text):
+    send, ctx, sid = date_conversation("2026-10-26")
+    send("quiero 3 cuotas")
+    reply = send(text)
+    assert reply["stage"] == "awaiting_confirmation" and "2026-11-01" in reply["text"]
+    assert "200,000 COP" in reply["text"] and not ctx.repository.agreements()
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    assert send("confirmo")["stage"] == "agreed"
+
+
+def test_repeated_date_ambiguity_reaches_existing_handoff_limit(date_conversation):
+    send, ctx, sid = date_conversation()
+    send("quiero 3 cuotas desde 2026-10-20")
+    for _ in range(2):
+        reply = send("el viernes o el 20")
+        assert reply["stage"] == "awaiting_terms" and reply["offer_id"] is None
+    reply = send("el viernes o el 20")
+    assert reply["stage"] == "handoff" and "asesor" in reply["text"]
+    assert not ctx.repository.agreements()
+    assert ctx.repository.get_session(sid)["pending_offer_id"] is None
+
+
+def test_unrecognized_date_clarifies_without_creating_agreement(date_conversation, monkeypatch):
+    send, ctx, sid = date_conversation()
+    send("quiero 3 cuotas desde 2026-10-20")
+    model_stub(
+        monkeypatch,
+        {
+            "intent": "unclear",
+            "payment_date": "2026-10-31",
+            "date_reference": {"quote": "a fin de mes", "day": 31},
+        },
+        [],
+    )
+    ctx.provider = "anthropic"
+    reply = send("a fin de mes")
+    assert "día, mes y año" in reply["text"] and "error del servicio" not in reply["text"]
+    assert reply["offer_id"] is None and not ctx.repository.agreements()
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3

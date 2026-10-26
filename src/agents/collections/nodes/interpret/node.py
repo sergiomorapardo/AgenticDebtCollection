@@ -12,6 +12,8 @@ def _clarify_payment_date(session, parsed, today):
     """Retain chosen terms while removing any authority to confirm an ambiguous date."""
     from datetime import timedelta
 
+    from agents.collections.policy import load_policy
+
     terms = dict(session.get("draft_terms", {}))
     terms.pop("payment_date", None)
     for key in ("amount_cop", "installments"):
@@ -32,6 +34,9 @@ def _clarify_payment_date(session, parsed, today):
         question = "La fecha tiene más de una interpretación posible. ¿Qué día, mes y año eliges para el primer pago?"
     else:
         question = "Esa fecha no existe en el calendario. ¿Qué día, mes y año quieres indicar?"
+    if reason in {"month", "year"}:
+        question += f" El primer pago debe quedar dentro de los próximos {load_policy().first_payment_within_days} días."
+    session["clarifications"] = session.get("clarifications", 0) + 1
     session.update(stage="awaiting_terms", pending_offer_id=None, draft_terms=terms)
     session["dialogue"] = {
         **session.get("dialogue", {}),
@@ -41,7 +46,7 @@ def _clarify_payment_date(session, parsed, today):
     return {
         "session": session,
         "interpretation": {**parsed.model_dump(mode="json"), "intent": "unclear"},
-        "intent_route": "response",
+        "intent_route": "handoff" if session["clarifications"] >= 3 else "response",
         "response_text": question
         + (f" Hoy es {today.isoformat()}." if reason != "weekday" else ""),
     }

@@ -143,7 +143,7 @@ within this window avoids duplicate provider calls and business writes.
   or concurrent stream cannot start a second charged request; use **Reintentar audio** explicitly.
   `tts_first_chunk_seconds` measures time to the provider's first chunk, separately from total TTS.
 - Interruptions unlock a new reply, including a counteroffer or request to stop. They never
-  mark the offer heard. The backend confirmation node re-presents an unheard offer in full
+  mark the offer heard. The backend interpretation node re-presents an unheard offer in full
   instead of committing it, explains why, and waits for a new acceptance after playback;
   confirmation requires a completed stream and playback acknowledgment for the current audio.
   Stale playback events cannot unlock a regenerated offer.
@@ -268,7 +268,7 @@ still rejecting partial numeric expressions and ranges such as `2-3` as one exac
 Follow-ups: replace the bounded arm-time recording with a codec-safe rolling pre-roll buffer
 to avoid uploading idle silence; calibrate echo/noise thresholds on physical devices; and
 move PCM cache writes off the event loop if concurrent-call measurements justify it.
-Also consolidate the proposal formatter shared in wording by negotiation and confirmation;
+Also consolidate the proposal formatter shared in wording by negotiation and interrupted-offer replay;
 the replay regression currently checks that the complete original proposal is retained.
 Courtesy idiom exemptions are narrow: other cardinal expressions such as `mil veces` become
 `1000 veces`. In identity stages, whitespace-separated single digits are treated as dictation
@@ -326,13 +326,18 @@ and the policy's first-payment window; missing components are not copied from a 
 | `el 20` / `el veinte` | Use the unique matching day in the allowed window; otherwise ask for month and year |
 | `20` after a date question | Complete the selected plan, never reinterpret it as COP 20 or 20 installments |
 | `octubre` / `2026` after clarification | Complete the pending month/year while retaining the original day and plan |
+| `el primero de noviembre del 2026` | Accept ordinal day 1 and either `de` or `del` before a year |
+| `noviembre del 2026` / `del 2026` after clarification | Complete the pending date without inventing components |
+| `prefiero el 3` after the installment menu | Keep the installment choice; do not treat it as day 3 |
 | `31 de febrero` or alternative dates | Ask for a valid, unambiguous calendar date |
 | `confirmo` while a date is unresolved | Repeat the clarification; create neither an offer nor a commitment |
 
 A date change invalidates an earlier offer. Once resolved, the complete installment schedule
 is presented with full ISO dates in writing and natural Spanish dates in speech. Only a new,
 explicit confirmation can record that offer. Existing date-window and contact rules still apply.
-Unknown calendar qualifiers prompt for a complete date instead of silently choosing one.
+Unknown calendar qualifiers or model-tagged unsupported expressions such as `a fin de mes`
+prompt for a complete date instead of reporting a service error. Repeated date clarifications
+use the existing three-attempt handoff limit. Month/year questions also state the payment window.
 The audio-completion gate now runs before routing acceptance to confirmation; final offer
 validation still runs at confirmation, and interrupted offers are replayed in full.
 

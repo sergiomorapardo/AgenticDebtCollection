@@ -48,6 +48,7 @@ def _date_references(text, context):
     from agents.collections.conversation import normalize_text
 
     normalized = normalize_text(normalize_transcript_numbers(text)).strip(" .!?¡¿")
+    normalized = re.sub(r"\bprimero\b", "1", normalized)
     dialogue = context.get("dialogue", {})
     pending = dialogue.get("pending_date") if dialogue.get("awaiting") == "date" else None
     terms = context.get("draft_terms", {})
@@ -76,7 +77,7 @@ def _date_references(text, context):
         add(match, day=value.day, month=value.month, year=value.year)
     month_pattern = "|".join(SPANISH_MONTHS)
     for match in re.finditer(
-        rf"\b(?:el\s+|dia\s+)?(\d{{1,2}})\s+de\s+({month_pattern})(?:\s+(?:de\s+)?(\d{{4}}))?\b",
+        rf"\b(?:el\s+|dia\s+)?(\d{{1,2}})\s+de\s+({month_pattern})(?:\s+(?:(?:de|del)\s+)?(\d{{4}}))?\b",
         normalized,
     ):
         add(
@@ -100,13 +101,19 @@ def _date_references(text, context):
     for match in re.finditer(
         r"\b(?:el|dia)\s+(\d{1,2})(?!\d|\s*(?:pesos|cop|mil|cuotas))\b", normalized
     ):
+        if (
+            dialogue.get("awaiting") == "option"
+            and not awaiting_date
+            and not re.search(r"\b(?:dia|cuotas?|pagos?|pagar|desde|para)\b", normalized)
+        ):
+            continue
         add(match, day=int(match[1]))
     if not references and awaiting_date:
         if match := re.fullmatch(r"(\d{1,2})", normalized):
             add(match, day=int(match[1]))
         elif pending and pending.get("day"):
             if match := re.fullmatch(
-                rf"(?:de\s+)?({month_pattern})(?:\s+(?:de\s+)?(\d{{4}}))?", normalized
+                rf"(?:de\s+)?({month_pattern})(?:\s+(?:(?:de|del)\s+)?(\d{{4}}))?", normalized
             ):
                 add(
                     match,
@@ -114,7 +121,9 @@ def _date_references(text, context):
                     month=SPANISH_MONTHS.index(match[1]) + 1,
                     year=int(match[2]) if match[2] else None,
                 )
-            elif pending.get("month") and (match := re.fullmatch(r"(?:de\s+)?(\d{4})", normalized)):
+            elif pending.get("month") and (
+                match := re.fullmatch(r"(?:(?:de|del)\s+)?(\d{4})", normalized)
+            ):
                 add(match, day=pending["day"], month=pending["month"], year=int(match[1]))
         elif (
             pending
@@ -205,21 +214,21 @@ def _ground_payment_date(turn, text, today, stage, context):
     ):
         references = [PaymentDateReference.model_validate(pending)]
         pending_confirmation = True
+    unsupported = not references and turn.date_reference is not None
+    if unsupported:
+        # An unsupported date is a clarification, never a provider failure or an
+        # opportunity to authorize the model's guessed calendar components.
+        references = [PaymentDateReference(quote=normalized[:160] or text[:160])]
     if not references:
-        if turn.date_reference is not None:
-            raise ValueError("Date reference is not grounded in a supported current expression")
         return turn.model_copy(update={"date_clarification": None})
     reference = references[0]
-    # The backend's complete current expression wins over guessed components.
-    if (
-        not pending_confirmation
-        and turn.date_reference is not None
-        and turn.date_reference.quote not in text
-    ):
-        raise ValueError("Date evidence is not in the current message")
+    # Backend-parsed source spans are authoritative; model quote casing, accents
+    # and inferred components cannot override them.
     resolved, question = (
         _resolve_date_reference(reference, today) if len(references) == 1 else (None, "multiple")
     )
+    if unsupported:
+        resolved, question = None, "multiple"
     if re.search(r"\b(?:o|sino)\b|\bno\s+(?:el|este|proximo|hoy|manana)", normalized):
         resolved, question = None, "multiple"
     if pending_confirmation:
@@ -250,11 +259,17 @@ def _ground_payment_date(turn, text, today, stage, context):
         if getattr(turn, field) is not None and (
             evidence is None
             or any(
-                normalize_transcript_numbers(evidence.quote) in item.quote for item in references
+                re.search(
+                    rf"(?<!\w){re.escape(normalize_transcript_numbers(evidence.quote))}(?!\w)",
+                    item.quote,
+                )
+                for item in references
             )
         ):
             value = getattr(turn, field)
-            if field == "installments" and re.search(rf"\b{value}\s+cuotas?\b", remainder):
+            if field == "installments" and re.search(
+                rf"\b{value}\s+(?:cuotas?|pagos?)\b", remainder
+            ):
                 continue
             if field == "amount_cop" and re.search(rf"(?<![\w\d]){value}(?![\w\d])", remainder):
                 continue

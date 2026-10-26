@@ -814,3 +814,93 @@ def test_confirmation_during_date_question_cannot_reuse_model_supplied_old_date(
     assert result.status == "classified"
     assert result.turn.payment_date is None and result.turn.date_clarification == "weekday"
     assert result.turn.acceptance == "none" and result.turn.intent == "unclear"
+
+
+@pytest.mark.parametrize(
+    "text,pending,expected",
+    [
+        ("el 20 de noviembre del 2026", None, date(2026, 11, 20)),
+        ("noviembre del 2026", {"quote": "el 20", "day": 20}, date(2026, 11, 20)),
+        ("del 2026", {"quote": "20 de noviembre", "day": 20, "month": 11}, date(2026, 11, 20)),
+        ("el primero de noviembre", None, date(2026, 11, 1)),
+        ("el primero de noviembre del dos mil veintiséis", None, date(2026, 11, 1)),
+    ],
+)
+def test_natural_calendar_forms_use_backend_components(model_call, text, pending, expected):
+    _, response = model_call
+    response["result"] = {
+        "intent": "unclear",
+        "payment_date": "2030-01-01",
+        "date_reference": {"quote": text, "year": 2030},
+    }
+    result = understand_turn(
+        text,
+        ctx=CONTEXT,
+        today=date(2026, 10, 26),
+        stage="awaiting_terms",
+        context={
+            "draft_terms": {"route": "negotiation", "installments": 3},
+            "dialogue": {"awaiting": "date", "pending_date": pending},
+        },
+    )
+    assert result.status == "classified"
+    assert result.turn.payment_date == expected and result.turn.date_clarification is None
+    assert result.turn.installments is None and result.turn.acceptance == "none"
+
+
+@pytest.mark.parametrize(
+    "text,quote,expected",
+    [
+        ("El viernes", "el viernes", date(2026, 10, 23)),
+        ("EL MIÉRCOLES", "el miercoles", date(2026, 10, 21)),
+    ],
+)
+def test_backend_date_parsing_ignores_model_quote_casing(model_call, text, quote, expected):
+    _, response = model_call
+    response["result"] = {"intent": "unclear", "date_reference": {"quote": quote}}
+    result = understand_turn(text, ctx=CONTEXT, today=TODAY, stage="awaiting_terms")
+    assert result.status == "classified" and result.turn.payment_date == expected
+
+
+@pytest.mark.parametrize("text", ["a fin de mes", "la quincena"])
+def test_unsupported_model_date_asks_instead_of_reporting_service_error(model_call, text):
+    _, response = model_call
+    response["result"] = {
+        "intent": "accept_offer",
+        "acceptance": "unconditional_current_offer",
+        "payment_date": "2026-10-30",
+        "date_reference": {"quote": text, "day": 30, "month": 10, "year": 2026},
+    }
+    result = understand_turn(text, ctx=CONTEXT, today=TODAY, stage="awaiting_confirmation")
+    assert result.status == "classified" and result.turn.date_clarification == "multiple"
+    assert result.turn.payment_date is None and result.turn.acceptance == "none"
+    assert result.turn.date_reference.day is None and result.turn.date_reference.year is None
+
+
+@pytest.mark.parametrize("day", [2, 12])
+def test_date_digit_does_not_erase_separate_payment_count(model_call, day):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 2,
+        "installments_evidence": {"quote": "dos"},
+    }
+    result = understand_turn(
+        f"en dos pagos el {day}", ctx=CONTEXT, today=date(2026, 11, 1), stage="ready"
+    )
+    assert result.status == "classified" and result.turn.installments == 2
+
+
+@pytest.mark.parametrize("text", ["prefiero el 3", "el 3", "quiero el tres"])
+def test_menu_selection_is_not_a_day_of_month(model_call, text):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 3,
+        "installments_evidence": {"quote": "tres" if "tres" in text else "3"},
+    }
+    result = understand_turn(
+        text, ctx=CONTEXT, today=TODAY, stage="ready", context={"dialogue": {"awaiting": "option"}}
+    )
+    assert result.status == "classified" and result.turn.installments == 3
+    assert result.turn.payment_date is None and result.turn.date_clarification is None
