@@ -256,9 +256,11 @@ A full live Haiku/ElevenLabs call used the synthetic ID, verification, a three-i
 proposal, and confirmation. An 82-second local-only speaker capture replayed all five complete
 responses with the shipped WAV preparation. Offline waveform alignment and transcription
 retained all five opening words and endings, and recognized COP 600,000 and COP 200,000.
-The local transcriber rendered the spoken year as 2016 in both source and microphone audio;
-year pronunciation remains an acceptance limitation, not a verified success. Recordings were
-not uploaded, and all capture microphone tracks were stopped after the test.
+The initial base-sized local transcriber misread the year as 2016. A separate small-sized
+local transcription recognized 2026 in all three dates, in both the source and the same
+speaker capture; it also retained the monetary amounts. This verifies that recorded sample,
+not every future synthesis. Recordings were not uploaded, and all capture microphone tracks
+were stopped after the test.
 Partial provider failures abort the HTTP body, so the browser rejects incomplete audio without
 acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
 still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
@@ -338,4 +340,5 @@ Regressions cover month/year boundaries, leap days, invalid dates, ambiguous wee
 short follow-ups, stale-offer acceptance, preserved plans, and separate monetary/count roles.
 Live Haiku checks reproduced and then verified short month and next-week follow-ups with
 synthetic data; no speech synthesis or microphone recording was needed for those checks.
-The earlier offline ASR uncertainty about the spoken year remains a voice acceptance limit.
+A second, more precise offline ASR pass verified the full spoken dates, including 2026,
+in the original synthetic proposal and its local speaker capture.
