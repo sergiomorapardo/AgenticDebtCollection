@@ -40,11 +40,9 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+          # Select the reviewer explicitly; prose requests do not set the CLI model.
+          claude_args: >-
+            --model opus
+            --max-turns 40
+            --disallowedTools "Agent,Task,Skill"
+            --append-system-prompt "Use Opus for code reviews; do not switch models or delegate reviews. For review requests, inspect the diff and relevant files, report confirmed findings, and publish a completed summary even when there are no actionable findings. Reserve the final five turns for publishing. Report denied validation instead of repeatedly retrying it."
