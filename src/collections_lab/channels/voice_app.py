@@ -15,7 +15,7 @@ from time import monotonic
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -114,12 +114,13 @@ def create_app(
             and not call.failed
             and call.reply is not None
             and (
-                call.played_audio == call.audio
+                call.played_audio == call.audio or call.interrupted_audio == call.audio
                 if call.audio
                 else not call.requires_offer_playback()
             ),
             "audio_id": audio_id,
             "audio_url": f"/api/audio/{audio_id}" if audio_id else None,
+            "audio_format": "pcm_s16le_24000" if audio_id and audio_id.endswith(".pcm") else "mp3",
             "warning": call.warning,
             "details": call.details(),
             "provider": provider,
@@ -222,12 +223,33 @@ def create_app(
         return empty_trace
 
     @app.get("/api/audio/{audio_id}")
-    def audio(audio_id: str, request: Request):
+    async def audio(audio_id: str, request: Request):
         entry = browser(request)
         with entry.read_lock:
             path = entry.audio_path
             if not path or Path(path).name != audio_id:
                 raise HTTPException(404, "Audio no disponible para esta sesión.")
+        call = entry.call
+        if path.endswith(".pcm"):
+            if call.audio_status == "complete":
+                return FileResponse(path, media_type="application/octet-stream")
+            try:
+                call.claim_audio(audio_id)
+            except VoiceInputError as error:
+                raise HTTPException(409, str(error)) from None
+
+            async def chunks():
+                try:
+                    async for chunk in call.stream_audio(audio_id):
+                        yield chunk
+                finally:
+                    # Publish only this call; a new call can start while cancellation unwinds.
+                    if entry.call is call:
+                        with entry.read_lock:
+                            entry.published["details"] = call.details()
+                            entry.published["warning"] = call.warning
+
+            return StreamingResponse(chunks(), media_type="application/octet-stream")
         return FileResponse(path, media_type="audio/mpeg")
 
     def perform(entry, action, raw, request_id, call_id, content_type):
@@ -300,7 +322,15 @@ def create_app(
                                 raise VoiceInputError(
                                     "Ese audio ya no corresponde a la respuesta actual."
                                 )
-                            call.acknowledge_playback(audio_id)
+                            if (
+                                not call.acknowledge_playback(audio_id)
+                                and call.played_audio != call.audio
+                            ):
+                                raise VoiceInputError(
+                                    "El audio no terminó; no se confirmó su reproducción."
+                                )
+                        elif action == "interrupt":
+                            call.interrupt_audio(payload.get("audio_id"))
                         elif action == "retry":
                             call.retry_audio()
                         elif action == "end":
@@ -362,7 +392,7 @@ def create_app(
 
     @app.post("/api/{action}")
     async def mutate(action: str, request: Request):
-        if action not in {"start", "text", "recording", "playback", "retry", "end"}:
+        if action not in {"start", "text", "recording", "playback", "interrupt", "retry", "end"}:
             raise HTTPException(404, "Acción desconocida.")
         entry = browser(request)
         request_id = request.headers.get("x-request-id", "")

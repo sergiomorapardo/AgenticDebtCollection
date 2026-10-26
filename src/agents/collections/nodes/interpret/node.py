@@ -3,8 +3,74 @@
 from langgraph.runtime import Runtime
 
 from agents.collections.runtime import AppContext, resolve_context
+from agents.collections.semantic import SPANISH_MONTHS
 from agents.collections.semantic_state import current_understanding, matches_confirmation_context
 from agents.collections.state import State
+
+
+def _clarify_payment_date(session, parsed, today):
+    """Retain chosen terms while removing any authority to confirm an ambiguous date."""
+    from datetime import timedelta
+
+    from agents.collections.policy import load_policy
+
+    terms = dict(session.get("draft_terms", {}))
+    terms.pop("payment_date", None)
+    for key in ("amount_cop", "installments"):
+        if (value := getattr(parsed, key)) is not None:
+            terms[key] = value
+    if parsed.amount_cop is not None:
+        terms["amount_is_capacity"] = parsed.amount_is_capacity
+    terms.setdefault("route", "promise" if parsed.intent == "promise" else "negotiation")
+    reference = parsed.date_reference
+    reason = parsed.date_clarification
+    if reason == "month":
+        question = f"Cuando dices el {reference.day}, ¿de qué mes y año hablamos?"
+    elif reason == "year":
+        question = f"¿De qué año es el {reference.day} de {SPANISH_MONTHS[reference.month - 1]}?"
+    elif reason == "weekday":
+        question = f"¿Te refieres a hoy, {today.isoformat()}, o al mismo día de la próxima semana, {(today + timedelta(days=7)).isoformat()}?"
+    elif reason == "multiple":
+        question = "La fecha tiene más de una interpretación posible. ¿Qué día, mes y año eliges para el primer pago?"
+    else:
+        question = "Esa fecha no existe en el calendario. ¿Qué día, mes y año quieres indicar?"
+    if reason in {"month", "year"}:
+        question += f" El primer pago debe quedar dentro de los próximos {load_policy().first_payment_within_days} días."
+    session["clarifications"] = session.get("clarifications", 0) + 1
+    session.update(stage="awaiting_terms", pending_offer_id=None, draft_terms=terms)
+    session["dialogue"] = {
+        **session.get("dialogue", {}),
+        "awaiting": "date",
+        "pending_date": reference.model_dump(mode="json"),
+    }
+    return {
+        "session": session,
+        "interpretation": {**parsed.model_dump(mode="json"), "intent": "unclear"},
+        "intent_route": "handoff" if session["clarifications"] >= 3 else "response",
+        "response_text": question
+        + (f" Hoy es {today.isoformat()}." if reason != "weekday" else ""),
+    }
+
+
+def _replay_unheard_offer(state, session, ctx):
+    """Keep an unheard financial offer out of the confirmation route."""
+    from agents.collections.policy import load_policy, validate_offer
+
+    try:
+        offer = ctx.repository.get_offer(session["pending_offer_id"], state["session_id"])
+        validate_offer(
+            offer, ctx.repository.get_account(session["account_id"]), load_policy(), today=ctx.today
+        )
+    except ValueError:
+        session.update(pending_offer_id=None, stage="ready", draft_terms={})
+        text = "La oferta dejó de ser válida o el saldo cambió. Debemos calcular y confirmar una nueva; no guardé un acuerdo."
+    else:
+        schedule = "; ".join(
+            f"{item.amount_cop:,} COP el {item.due_date.isoformat()}" for item in offer.installments
+        )
+        total = sum(item.amount_cop for item in offer.installments)
+        text = f"La oferta se interrumpió. Escúchala completa antes de confirmar. Propuesta: {schedule}. Total: {total:,} COP, sin descuentos ni cargos adicionales. ¿Confirmas este importe y estas fechas? Responde confirmo o propone cambios."
+    return {"session": session, "intent_route": "response", "response_text": text}
 
 
 def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
@@ -17,6 +83,11 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
             "response_text": "No pude interpretar la respuesta por un error del servicio. No registré ningún acuerdo; puedes reintentar.",
         }
     parsed = understanding.turn
+    if parsed.date_clarification and parsed.date_reference is not None:
+        return _clarify_payment_date(session, parsed, ctx.today)
+    if parsed.payment_date is not None:
+        session["dialogue"] = dict(session.get("dialogue", {}))
+        session["dialogue"].pop("pending_date", None)
     if parsed.intent == "accept_offer" and (
         parsed.acceptance != "unconditional_current_offer"
         or session["stage"] != "awaiting_confirmation"
@@ -36,6 +107,11 @@ def interpret_turn(state: State, runtime: Runtime[AppContext]) -> dict:
                 "acceptance": "conditional" if parsed.acceptance == "conditional" else "none",
             }
         )
+    if parsed.intent == "accept_offer" and not ctx.offer_audio_completed:
+        return {
+            **_replay_unheard_offer(state, session, ctx),
+            "interpretation": parsed.model_dump(mode="json"),
+        }
     if parsed.acceptance == "conditional" and parsed.intent in {"accept_offer", "unclear"}:
         parsed = parsed.model_copy(update={"intent": "reject_offer"})
     if (

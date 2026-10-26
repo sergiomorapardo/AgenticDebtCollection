@@ -5,6 +5,9 @@ The server reuses the existing conversational graph and ElevenLabs adapters; cre
 remain on the server. No frontend framework, asset CDN, or separate frontend build is required.
 The interface uses translucent surfaces, a call timer, microphone/hangup controls, automatic
 response playback, and an optional transcript with typed replies.
+**Vista Glass** toggles a dark blue/green glass appearance while keeping the same call,
+transcript, and optional technical viewer. The original light view is the default. The choice
+is saved in browser local storage when available; changing it never restarts the call.
 
 ```mermaid
 sequenceDiagram
@@ -19,9 +22,15 @@ sequenceDiagram
     Speech-->>API: Transcript
     API->>Agent: New business turn
     Agent-->>API: Persisted, reviewed response
-    API->>Speech: Synthesize complete response
     API-->>UI: State and session-scoped audio URL
-    UI->>User: Autoplay response
+    UI->>API: Open audio stream
+    API->>Speech: Stream validated response as PCM
+    Speech-->>API: Audio chunks
+    API-->>UI: Audio chunks
+    UI->>User: Prepare output and play complete WAV
+    User->>UI: Speak to interrupt
+    UI->>API: Interrupt current audio ID
+    API->>Speech: Cancel synthesis stream
     UI->>API: Current audio ended
     API-->>UI: Enable next reply
 ```
@@ -39,7 +48,26 @@ Open http://127.0.0.1:7860. Open the HTML through this server, not as a `file://
 The server binds only to loopback. Microphone capture requires browser permission.
 The API key needs Text to Speech and Speech to Text access, and the voice must be
 available to your account through the API. Defaults are `scribe_v2` and
-`eleven_multilingual_v2`. There are no automatic charged retries.
+`eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
+[ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
+The browser receives the complete PCM recording, wraps it losslessly in a mono WAV header,
+and plays it through the native audio element. Each response automatically prepends a
+1.5-second, 12 Hz carrier with gradual edges in the same WAV, preserving all speech bytes.
+There is no audio-protection toggle or audible 660 Hz whistle. This addresses outputs that
+suppress initial sound after silence. Both a pre-playback timer and a silent prefix failed
+in local HDMI-speaker measurements; the carrier preserved the five measured response onsets.
+The preparation adds 1.5 seconds to each response, including retries. Playback waits for the
+complete download and microphone/audio readiness; interruption and hangup stop preparation too.
+No system audio settings are changed. This measured workaround is not a guarantee for every device.
+There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
+Both speech paths render `COP` as `pesos` (`1 COP` as `un peso`) only in the provider request:
+`600,000 COP` stays written in the conversation while speech receives `seiscientos mil pesos`.
+Currency amounts are spelled out deterministically in Spanish, including thousands, millions,
+masculine endings, and cents when explicitly given. Ambiguous separators and amounts outside
+the supported range fail before a paid request instead of guessing a pronunciation. Persisted
+responses, transcripts, and business amounts retain their original representation.
+Valid ISO dates are expanded only for speech: `2026-10-20` becomes
+`veinte de octubre de dos mil veintiséis`. Invalid calendar dates fail before synthesis.
 
 For interpretation with Claude Haiku, set `ANTHROPIC_API_KEY` and run:
 
@@ -53,8 +81,11 @@ the existing business checks before synthesis; speculative tokens are never spok
 ## Try a conversation
 
 1. Click **Iniciar llamada**. The greeting plays automatically.
-2. When **Es tu turno** appears, click the microphone, speak, then click it again to send.
-   Transcription, sending, and response playback happen automatically.
+2. Allow microphone access. Speak when ready, including while the agent speaks: sustained
+   microphone activity pauses native playback immediately. Hanging up also cancels a pending
+   audio download.
+   About 900 ms of silence sends the recording; **Responder** / **Enviar** remain available.
+   Use headphones to reduce echo. With permission denied, use the text fallback.
 3. Say `Mi cédula es 123456789`, then `verificar 1111`.
 4. Request `quiero 3 cuotas desde 2026-10-20`.
 5. Wait for the proposal audio to finish, then say `confirmo`.
@@ -62,6 +93,22 @@ the existing business checks before synthesis; speculative tokens are never spok
 The red **Colgar** button ends the conversation, stops browser audio/capture, and avoids
 an extra synthesized goodbye. **Ver conversación o escribir** expands the transcript and
 text fallback; Enter sends. Recordings stop at 60 seconds and are limited to 10 MB.
+The microphone stays active during the call after permission; hangup and page exit release it.
+Detection uses a local amplitude threshold with 120 ms of sustained activity. It is a demo
+voice detector, not speaker identification: loud background noise or echo may interrupt.
+Capture starts before detection so short utterances such as `uno` retain their initial sound.
+
+Supported Spanish cardinals are normalized before display and interpretation: `uno` → `1`,
+`doscientos mil pesos` → `200000 pesos`, and `1,5 millones` → `1500000`. During identification,
+dictated digits such as `cero cero uno uno` become `0011`, preserving leading zeroes.
+Comma-separated lists of at least three single digits are also joined in identity stages:
+`1, 2, 3, 4, 5, 6, 7, 8, 9` becomes `123456789`. An extra `10` is not discarded or
+silently corrected to the demo ID. The demo ID and verification code stay visible below the call.
+Articles such as `una persona` remain prose. Unsupported/ambiguous expressions are preserved;
+this cannot repair an incorrectly recognized word. Pydantic structured output separately
+requires strict integer amounts/counts and quoted numeric evidence from the current message.
+Backend normalization checks the whole expression, preventing a model from treating `250 mil`
+as `250` or selecting only `mil`. Invalid results request clarification without creating terms.
 
 The fictional ID `123456789` aliases `1000000001`, selecting `demo-001`, code `1111`,
 and initial balance COP 600,000. It is not a separate customer or debt. The second fixture
@@ -80,6 +127,7 @@ A saved commitment never marks a debt as paid.
 | `POST /api/recording` | Transcribe raw WebM, Ogg, MP4, or WAV and send one turn |
 | `GET /api/audio/{audio_id}` | Read the current audio belonging to this browser session |
 | `POST /api/playback` | Acknowledge completion of the current `audio_id` |
+| `POST /api/interrupt` | Stop current synthesis without marking the offer as heard |
 | `POST /api/retry` | Regenerate current response audio without repeating the business turn |
 | `POST /api/end` | End the current conversation |
 
@@ -91,8 +139,14 @@ filesystem paths. Calls serialize per browser session. The latest 128 request ID
 results are cached in memory, including uncertain failures; replaying the same request
 within this window avoids duplicate provider calls and business writes.
 
-- If autoplay is blocked, **Escuchar mensaje** starts playback. Only the current audio's
-  ended event unlocks the next reply; stale events cannot unlock a regenerated offer.
+- Completed audio can be replayed without another synthesis request. A failed, interrupted,
+  or concurrent stream cannot start a second charged request; use **Reintentar audio** explicitly.
+  `tts_first_chunk_seconds` measures time to the provider's first chunk, separately from total TTS.
+- Interruptions unlock a new reply, including a counteroffer or request to stop. They never
+  mark the offer heard. The backend interpretation node re-presents an unheard offer in full
+  instead of committing it, explains why, and waits for a new acceptance after playback;
+  confirmation requires a completed stream and playback acknowledgment for the current audio.
+  Stale playback events cannot unlock a regenerated offer.
 - **Reintentar audio** only synthesizes the saved response. An offer with failed audio
   blocks negotiation until synthesis and playback succeed. Hanging up remains available.
 - Transcription errors leave the business turn unchanged. Record again or use typed input.
@@ -107,7 +161,7 @@ within this window avoids duplicate provider calls and business writes.
   errors are redacted; only dedicated input/provider errors carry user-facing messages.
   SQLite rolls back a failed graph transaction and already enforces one agreement per session.
   A greeting that fails during speech remains reachable for audio retry.
-- Each call has isolated SQLite state, response MP3s, and playback-event evidence under
+- Each call has isolated SQLite state, completed response PCM, and playback-event evidence under
   ignored `.local/voice/<id>/`. Uploaded recording files are removed after transcription;
   saved response audio and business evidence remain on disk.
 - `.env` is local to each worktree. Git only distributes `.env.example`.
@@ -170,14 +224,18 @@ by their parent node; this does not expand their internal execution or implement
 ## Boundaries
 
 This is a local demo API, not a production authentication boundary or telephone service.
-Browser-ended events do not prove audibility or attention. Continuous listening, barge-in,
-stronger playback tracking, production authentication, and telephony remain planned.
-Streaming remains a TODO, including its Free-plan endpoint/credit validation. Only audio
-and text needed for speech are sent to ElevenLabs. Use fictional data.
+Browser playback events do not prove audibility or attention. Stronger playback tracking,
+production authentication, and telephony remain planned. Scribe transcription still uploads
+a completed bounded recording. TTS streams to the server/browser cache, but native WAV
+playback begins only after the complete response; this does not stream audible playback,
+STT, or speculative LLM tokens.
+Streaming cancels audio generation/delivery, not an already persisted graph turn. Plan-specific
+endpoint/credit availability and physical microphone/echo performance require live acceptance.
+Only audio and text needed for speech are sent to ElevenLabs. Use fictional data.
 
 ## Verification
 
-`uv run --extra voice pytest -q` passes 308 tests. Voice tests use fake speech and mock HTTP
+`uv run --extra voice pytest -q` runs the offline suite. Voice tests use fake speech and mock HTTP
 transport without paid calls. They cover provider request shape, redacted errors, automatic
 transcription/send, offer playback gating, retries without duplicate agreements, session/audio
 isolation, request replay, stale call IDs, origin/size checks, reload timing, uncertain failures, and live trace reads during a blocked node. Trace tests
@@ -185,12 +243,48 @@ also cover automatic layout, parallel branches, cycles, renamed terminal nodes, 
 source reload deferred during active calls, invalid-edit recovery, session isolation, failed-start
 recovery, non-blocking reads, error redaction, transaction rollback, and graph-turn quarantine.
 Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
+The browser state-machine regression uses Node when available and exercises complete-download
+WAV playback, odd-byte network boundaries, exact speech-sample preservation after output preparation,
+speech interruption, download cancellation, recording pre-roll, and acknowledgment only after
+the native audio element fires `ended`. It also covers microphone setup/denial, autoplay
+recovery, and object URL cleanup. API tests cover partial streams, explicit retries, cancellation
+cleanup, and interrupted-offer acceptance protection.
+Native playback uses the complete Multilingual v2 response, matching the B comparison sample.
+Initial playback waits for microphone setup (grant or denial) and native audio readiness.
+Hanging up cancels the wait; denying the microphone retains typed replies.
+A full live Haiku/ElevenLabs call used the synthetic ID, verification, a three-installment
+proposal, and confirmation. An 82-second local-only speaker capture replayed all five complete
+responses with the shipped WAV preparation. Offline waveform alignment and transcription
+retained all five opening words and endings, and recognized COP 600,000 and COP 200,000.
+The initial base-sized local transcriber misread the year as 2016. A separate small-sized
+local transcription recognized 2026 in all three dates, in both the source and the same
+speaker capture; it also retained the monetary amounts. This verifies that recorded sample,
+not every future synthesis. Recordings were not uploaded, and all capture microphone tracks
+were stopped after the test.
+Partial provider failures abort the HTTP body, so the browser rejects incomplete audio without
+acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
+still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
+
+Follow-ups: replace the bounded arm-time recording with a codec-safe rolling pre-roll buffer
+to avoid uploading idle silence; calibrate echo/noise thresholds on physical devices; and
+move PCM cache writes off the event loop if concurrent-call measurements justify it.
+Also consolidate the proposal formatter shared in wording by negotiation and interrupted-offer replay;
+the replay regression currently checks that the complete original proposal is retained.
+Courtesy idiom exemptions are narrow: other cardinal expressions such as `mil veces` become
+`1000 veces`. In identity stages, whitespace-separated single digits are treated as dictation
+(`1 2` → `12`); ambiguous mixed forms such as `doce tres` remain unchanged. Clearing obsolete
+offer playback metadata after a business decline is a cleanup follow-up; it grants no authority.
+
+Live adapter validation for this change synthesized `Uno.` through the PCM endpoint and
+transcribed it as `1`. Claude Haiku returned validated numeric fields for one installment,
+one peso per month, and two hundred thousand pesos per month. This verifies provider
+compatibility for the configured account, not a latency benchmark or physical microphone test.
 
 Chrome verification with previously generated audio covers greeting/reply autoplay, enabling
 reply controls after playback, Enter-to-send, session reload, and hangup. The cached audio is
 a UI test double, not a validation of newly generated speech content. Responsive layout is
 checked at desktop and mobile widths. The technical viewer is checked for its default
-hidden state, show/hide controls, execution highlighting, and expandable event details. Physical microphone capture still needs manual acceptance.
+hidden state, show/hide controls, execution highlighting, and expandable event details. Further microphone/echo conditions still need acceptance.
 
 Earlier live adapter validation confirmed TTS MP3 generation with the configured designed
 voice and Scribe v2 transcription of `Quiero tres cuotas desde mañana`. In the earlier UI,
@@ -205,8 +299,9 @@ ignored `.validation/`.
 
 Each submitted human turn follows the registered graph's `understand_message` and
 `route_chat_message` nodes. Voice does not run a second intent classifier. Playback gating
-applies to every text/audio reply to an unheard offer, identified by `awaiting_confirmation`
-or a nonempty `offer_id`, regardless of the words used.
+applies to an unheard offer, identified by `awaiting_confirmation` or a nonempty `offer_id`.
+Explicit interruption allows new text/audio turns while the backend keeps acceptance disabled
+until a complete offer has played.
 Hang up closes only the local voice transport without inventing a customer utterance,
 calling the model, or writing a payment agreement. It releases the graph lease even when
 interpretation is unavailable. It does not change the persisted business outcome.
@@ -217,3 +312,38 @@ business session across separate voice calls remains unsupported by this isolate
 - [ ] **TODO:** Resume the same business session across separate voice calls after fresh
   identity verification and an explicit customer request, preserving history and avoiding
   duplicate agreements. See the [roadmap](../../docs/ROADMAP.md#todo-resume-a-business-session-across-voice-calls).
+
+### Natural payment dates
+
+The semantic output includes a typed `PaymentDateReference` with the customer's explicit
+calendar components. The backend resolves supported Spanish forms against the Colombia clock
+and the policy's first-payment window; missing components are not copied from a model guess.
+
+| Reply | Behavior |
+| --- | --- |
+| `el viernes` | Resolve the upcoming Friday; if today is Friday, ask whether today or next Friday |
+| `este viernes` / `el próximo viernes` | Resolve the specified occurrence and present its complete date |
+| `el 20` / `el veinte` | Use the unique matching day in the allowed window; otherwise ask for month and year |
+| `20` after a date question | Complete the selected plan, never reinterpret it as COP 20 or 20 installments |
+| `octubre` / `2026` after clarification | Complete the pending month/year while retaining the original day and plan |
+| `el primero de noviembre del 2026` | Accept ordinal day 1 and either `de` or `del` before a year |
+| `noviembre del 2026` / `del 2026` after clarification | Complete the pending date without inventing components |
+| `prefiero el 3` after the installment menu | Keep the installment choice; do not treat it as day 3 |
+| `31 de febrero` or alternative dates | Ask for a valid, unambiguous calendar date |
+| `confirmo` while a date is unresolved | Repeat the clarification; create neither an offer nor a commitment |
+
+A date change invalidates an earlier offer. Once resolved, the complete installment schedule
+is presented with full ISO dates in writing and natural Spanish dates in speech. Only a new,
+explicit confirmation can record that offer. Existing date-window and contact rules still apply.
+Unknown calendar qualifiers or model-tagged unsupported expressions such as `a fin de mes`
+prompt for a complete date instead of reporting a service error. Repeated date clarifications
+use the existing three-attempt handoff limit. Month/year questions also state the payment window.
+The audio-completion gate now runs before routing acceptance to confirmation; final offer
+validation still runs at confirmation, and interrupted offers are replayed in full.
+
+Regressions cover month/year boundaries, leap days, invalid dates, ambiguous weekdays,
+short follow-ups, stale-offer acceptance, preserved plans, and separate monetary/count roles.
+Live Haiku checks reproduced and then verified short month and next-week follow-ups with
+synthetic data; no speech synthesis or microphone recording was needed for those checks.
+A second, more precise offline ASR pass verified the full spoken dates, including 2026,
+in the original synthetic proposal and its local speaker capture.

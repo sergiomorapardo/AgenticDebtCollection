@@ -5,13 +5,330 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 
 from anthropic import APIError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agents.collections.numbers import NumberEvidence, normalize_transcript_numbers
 from agents.collections.prompts import PromptStage, render_prompt
+
+_WEEKDAYS = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
+SPANISH_MONTHS = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+
+
+class PaymentDateReference(BaseModel):
+    """Calendar components supplied by the customer, not an inferred complete date."""
+
+    model_config = ConfigDict(extra="forbid")
+    quote: str = Field(min_length=1, max_length=160)
+    day: int | None = Field(default=None, ge=1, le=31, strict=True)
+    month: int | None = Field(default=None, ge=1, le=12, strict=True)
+    year: int | None = Field(default=None, ge=1900, le=9999, strict=True)
+    weekday: int | None = Field(default=None, ge=0, le=6, strict=True)
+    occurrence: Literal["unspecified", "this", "next"] = "unspecified"
+
+
+def _date_references(text, context):
+    """Recognize bounded Spanish calendar forms, retaining their complete source spans."""
+    from agents.collections.conversation import normalize_text
+
+    normalized = normalize_text(normalize_transcript_numbers(text)).strip(" .!?¡¿")
+    normalized = re.sub(r"\bprimero\b", "1", normalized)
+    dialogue = context.get("dialogue", {})
+    pending = dialogue.get("pending_date") if dialogue.get("awaiting") == "date" else None
+    terms = context.get("draft_terms", {})
+    awaiting_date = (
+        dialogue.get("awaiting") == "date"
+        or bool(pending)
+        or (
+            not terms.get("payment_date")
+            and (terms.get("installments") or terms.get("route") == "promise")
+        )
+    )
+    references = []
+    occupied = []
+
+    def add(match, **fields):
+        if any(match.start() < end and match.end() > start for start, end in occupied):
+            return
+        occupied.append(match.span())
+        try:
+            references.append(PaymentDateReference(quote=match[0], **fields))
+        except ValueError:
+            references.append(PaymentDateReference(quote=match[0]))
+
+    for match in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized):
+        add(match, year=int(match[1]), month=int(match[2]), day=int(match[3]))
+    for match in re.finditer(r"\b(pasado manana|manana|hoy)\b", normalized):
+        if match[1] == "manana" and re.search(r"\bla\s+$", normalized[: match.start()]):
+            continue
+        value = context["today"] + timedelta(
+            days={"hoy": 0, "manana": 1, "pasado manana": 2}[match[1]]
+        )
+        add(match, day=value.day, month=value.month, year=value.year)
+    month_pattern = "|".join(SPANISH_MONTHS)
+    for match in re.finditer(
+        rf"\b(?:el\s+|dia\s+)?(\d{{1,2}})\s+de\s+({month_pattern})(?:\s+(?:(?:de|del)\s+)?(\d{{4}}))?\b",
+        normalized,
+    ):
+        add(
+            match,
+            day=int(match[1]),
+            month=SPANISH_MONTHS.index(match[2]) + 1,
+            year=int(match[3]) if match[3] else None,
+        )
+    weekday_pattern = "|".join(_WEEKDAYS)
+    for match in re.finditer(
+        rf"\b(?:(el|este|proximo|el proximo)\s+)?({weekday_pattern})(\s+que viene)?\b", normalized
+    ):
+        occurrence = (
+            "next"
+            if match[3] or "proximo" in (match[1] or "")
+            else "this"
+            if match[1] == "este"
+            else "unspecified"
+        )
+        add(match, weekday=_WEEKDAYS.index(match[2]), occurrence=occurrence)
+    for match in re.finditer(
+        r"\b(?:el|dia)\s+(\d{1,2})(?!\d|\s*(?:pesos|cop|mil|cuotas))\b", normalized
+    ):
+        if (
+            dialogue.get("awaiting") == "option"
+            and not awaiting_date
+            and not match[0].startswith("dia ")
+            and not re.search(
+                r"\b(?:desde|para|pago|pagar|empiezo|empezando|inicio)\s*$|\b\d+\s+(?:cuotas?|pagos?)\b",
+                normalized[: match.start()],
+            )
+        ):
+            continue
+        add(match, day=int(match[1]))
+    if not references and awaiting_date:
+        if match := re.fullmatch(r"(\d{1,2})", normalized):
+            add(match, day=int(match[1]))
+        elif pending and pending.get("day"):
+            if match := re.fullmatch(
+                rf"(?:de\s+)?({month_pattern})(?:\s+(?:(?:de|del)\s+)?(\d{{4}}))?", normalized
+            ):
+                add(
+                    match,
+                    day=pending["day"],
+                    month=SPANISH_MONTHS.index(match[1]) + 1,
+                    year=int(match[2]) if match[2] else None,
+                )
+            elif pending.get("month") and (
+                match := re.fullmatch(r"(?:(?:de|del)\s+)?(\d{4})", normalized)
+            ):
+                add(match, day=pending["day"], month=pending["month"], year=int(match[1]))
+        elif (
+            pending
+            and pending.get("weekday") is not None
+            and normalized in {"el proximo", "proximo", "la proxima semana", "este", "esta semana"}
+        ):
+            references.append(
+                PaymentDateReference(
+                    quote=normalized,
+                    weekday=pending["weekday"],
+                    occurrence="this" if normalized in {"este", "esta semana"} else "next",
+                )
+            )
+    return references, normalized, awaiting_date
+
+
+def _resolve_date_reference(reference, today):
+    from agents.collections.policy import load_policy
+
+    window = [
+        today + timedelta(days=offset)
+        for offset in range(load_policy().first_payment_within_days + 1)
+    ]
+    if reference.weekday is not None:
+        offset = (reference.weekday - today.weekday()) % 7
+        if reference.occurrence == "next" and offset == 0:
+            offset = 7
+        if reference.occurrence == "unspecified" and offset == 0:
+            return None, "weekday"
+        return today + timedelta(days=offset), None
+    if reference.day is None:
+        return None, "invalid"
+    if reference.month is not None and reference.year is not None:
+        try:
+            return date(reference.year, reference.month, reference.day), None
+        except ValueError:
+            return None, "invalid"
+    candidates = [
+        value
+        for value in window
+        if value.day == reference.day
+        and (reference.month is None or value.month == reference.month)
+    ]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if reference.month is not None:
+        # February 29 can be valid in a different year; April 31 never can.
+        try:
+            date(2000, reference.month, reference.day)
+        except ValueError:
+            return None, "invalid"
+        return None, "year"
+    return None, "month"
+
+
+def _ground_payment_date(turn, text, today, stage, context):
+    """Resolve partial dates locally; the model cannot invent their missing components."""
+    if (
+        stage not in {"ready", "awaiting_terms", "awaiting_confirmation"}
+        or context.get("identity_verified") is False
+    ):
+        return turn.model_copy(update={"date_reference": None, "date_clarification": None})
+    references, normalized, awaiting_date = _date_references(text, {**context, "today": today})
+    dialogue = context.get("dialogue", {})
+    pending = dialogue.get("pending_date") if dialogue.get("awaiting") == "date" else None
+    date_only = normalized
+    for item in references:
+        date_only = date_only.replace(item.quote, "", 1)
+    if turn.intent not in {
+        "unclear",
+        "promise",
+        "negotiate",
+        "counteroffer",
+        "accept_offer",
+        "continue",
+    } and not (
+        turn.intent == "clarify_process"
+        and dialogue.get("awaiting") == "date"
+        and references
+        and not date_only.strip()
+    ):
+        return turn.model_copy(update={"date_reference": None, "date_clarification": None})
+    pending_confirmation = False
+    if (
+        not references
+        and pending
+        and normalized in {"si", "confirmo", "acepto", "si confirmo", "si acepto"}
+    ):
+        references = [PaymentDateReference.model_validate(pending)]
+        pending_confirmation = True
+    morning_only = not references and re.search(r"\bla\s+manana\b", normalized)
+    if morning_only and not awaiting_date and turn.date_reference is None:
+        # Time-of-day remarks neither invent a payment date nor change a
+        # continuation/confirmation into a date negotiation.
+        turn = turn.model_copy(update={"payment_date": None})
+    unsupported = not references and (
+        turn.date_reference is not None or (morning_only and awaiting_date)
+    )
+    if unsupported:
+        # An unsupported date is a clarification, never a provider failure or an
+        # opportunity to authorize the model's guessed calendar components.
+        from agents.collections.conversation import normalize_text
+
+        quote = (
+            normalize_text(normalize_transcript_numbers(turn.date_reference.quote))
+            if turn.date_reference
+            else ""
+        )
+        quote = re.sub(r"\bprimero\b", "1", quote)
+        match = re.search(rf"(?<!\w){re.escape(quote)}(?!\w)", normalized) if quote else None
+        if match is None:
+            match = re.search(r"\b(?:(?:en|por)\s+)?la\s+manana\b", normalized)
+        references = [
+            PaymentDateReference(quote=match[0] if match else normalized[:160] or text[:160])
+        ]
+    if not references:
+        return turn.model_copy(update={"date_clarification": None})
+    reference = references[0]
+    # Backend-parsed source spans are authoritative; model quote casing, accents
+    # and inferred components cannot override them.
+    resolved, question = (
+        _resolve_date_reference(reference, today) if len(references) == 1 else (None, "multiple")
+    )
+    if unsupported:
+        resolved, question = None, "multiple"
+    if re.search(r"\b(?:o|sino)\b|\bno\s+(?:el|este|proximo|hoy|manana)", normalized):
+        resolved, question = None, "multiple"
+    if pending_confirmation:
+        resolved, question = None, question or "multiple"
+    remainder_for_qualifiers = normalized
+    for item in references:
+        remainder_for_qualifiers = remainder_for_qualifiers.replace(item.quote, "", 1)
+    if re.search(
+        r"\b(?:proxim[oa]|siguiente|otr[oa]|est[ea]|pasad[oa])\s+(?:mes|semana)\b|\b(?:mes|semana)\s+que viene\b|\b(?:de|del)\s+\d{4}\b",
+        remainder_for_qualifiers,
+    ):
+        resolved, question = None, "multiple"
+    updates = {
+        "date_reference": reference,
+        "date_clarification": question,
+        "payment_date": resolved,
+        "acceptance": "none",
+    }
+    remainder = normalized
+    for item in references:
+        remainder = remainder.replace(item.quote, "", 1)
+    # A day of the month must never become money or an installment count.
+    for field, evidence_name in (
+        ("amount_cop", "amount_evidence"),
+        ("installments", "installments_evidence"),
+    ):
+        evidence = getattr(turn, evidence_name)
+        if getattr(turn, field) is not None and (
+            evidence is None
+            or any(
+                re.search(
+                    rf"(?<!\w){re.escape(normalize_transcript_numbers(evidence.quote))}(?!\w)",
+                    item.quote,
+                )
+                for item in references
+            )
+        ):
+            value = getattr(turn, field)
+            if field == "installments" and re.search(
+                rf"\b{value}\s+(?:cuotas?|pagos?)\b", remainder
+            ):
+                continue
+            if field == "amount_cop" and re.search(rf"(?<![\w\d]){value}(?![\w\d])", remainder):
+                continue
+            # An explicit full-payment request infers a single installment.
+            if (
+                field == "installments"
+                and evidence is None
+                and turn.installments == 1
+                and turn.intent == "promise"
+                and turn.frequency == "one_off"
+            ):
+                continue
+            updates.update({field: None, evidence_name: None})
+    if not remainder.strip() or pending_confirmation:
+        updates.update(
+            intent="unclear",
+            frequency="unspecified",
+            amount_cop=None,
+            amount_evidence=None,
+            installments=None,
+            installments_evidence=None,
+            amount_is_capacity=False,
+        )
+    elif turn.intent in {"accept_offer", "continue"}:
+        updates["intent"] = "unclear"
+    updates["date_reference"] = reference.model_copy(
+        update={"quote": _redact_contacts(reference.quote)[:160]}
+    )
+    return turn.model_copy(update=updates)
 
 
 class TurnUnderstanding(BaseModel):
@@ -63,7 +380,20 @@ class TurnUnderstanding(BaseModel):
         default=None,
         description="Date explicitly supplied in this turn, resolving relative dates from today. A date-only answer completes existing terms; it does not replace the plan with a full-payment promise.",
     )
+    date_reference: PaymentDateReference | None = Field(
+        default=None,
+        description="Current partial calendar expression and only its explicit components. el viernes: weekday=4, quote=el viernes; el 20: day=20, quote=el 20, month/year=null. Backend resolves dates and asks when ambiguous.",
+    )
+    date_clarification: Literal["month", "year", "weekday", "invalid", "multiple"] | None = None
     installments: int | None = Field(default=None, gt=0, strict=True)
+    amount_evidence: NumberEvidence | None = Field(
+        default=None,
+        description="Required whenever amount_cop is present. Quote the complete current numeric expression; uno means integer 1, never the string uno.",
+    )
+    installments_evidence: NumberEvidence | None = Field(
+        default=None,
+        description="Required for an explicit installment count. uno/una means 1. May be null only for an inferred single installment from an explicit full-payment request.",
+    )
     acceptance: Literal["none", "conditional", "unconditional_current_offer"] = Field(
         default="none",
         description="Selecting a menu option, supplying a date or choosing installment count is none: it requests a proposal, not an agreement. unconditional_current_offer requires an existing backend pending_offer, awaiting_confirmation stage and unconditional consent to that exact presented schedule without new terms.",
@@ -187,6 +517,13 @@ def _backend_facts(context: dict | None) -> dict:
                 }
                 for item in value["installments"][:12]
                 if isinstance(item, dict) and type(item.get("amount_cop")) is int
+            ]
+        if key == "dialogue" and isinstance(value.get("pending_date"), dict):
+            selected["pending_date"] = PaymentDateReference.model_validate(
+                value["pending_date"]
+            ).model_dump(mode="json")
+            selected["pending_date"]["quote"] = _redact_contacts(selected["pending_date"]["quote"])[
+                :160
             ]
         result[key] = selected
     return result
@@ -322,6 +659,26 @@ def understand_turn(
     source text. Links/emails and prior-context numbers are redacted in every stage.
     """
     system = render_prompt("semantic_turn", stage=stage)
+    system += """
+Numeric output contract (required, including the examples above):
+Whenever amount_cop is non-null, also return amount_evidence={"quote": "exact numeric expression"}.
+Whenever installments is explicitly stated, also return installments_evidence with its expression.
+Do NOT omit a stated value to avoid supplying evidence. Extract uno/un/una as integer 1.
+"Puedo dar 1 peso al mes" => amount_cop=1, amount_evidence={"quote":"1"}, installments=null.
+"Quiero una cuota" => installments=1, installments_evidence={"quote":"una"}, amount_cop=null.
+"Puedo pagar doscientos mil pesos al mes" => amount_cop=200000,
+amount_evidence={"quote":"doscientos mil"}. Include all scale words in the quote, no unit labels.
+"250 mil" => amount_cop=250000, amount_evidence={"quote":"250 mil"}; never extract just 250 or mil.
+"1" after asking how many installments => installments=1, installments_evidence={"quote":"1"}.
+Date output contract: Quote only date words, excluding installment counts and monetary amounts.
+Do not guess missing month/year in partial dates. Return date_reference
+with the exact current quote and explicitly supplied components; weekday uses Monday=0.
+For el viernes return weekday=4 and occurrence=unspecified, with day/month/year null.
+For el 20 return day=20 with month/year/weekday null. A date-only answer is not acceptance.
+The backend resolves the calendar, asks for missing information and requires the full offer
+before a commitment. Preserve the chosen plan. Use pending_date only to complete its fields.
+Dates and identifiers are not monetary amounts. Keep identifiers as numeric_candidates references.
+"""
     if ctx.provider not in {"mock", "anthropic"}:
         raise ValueError(f"Unsupported provider: {ctx.provider}")
     tokens = []
@@ -350,6 +707,7 @@ def understand_turn(
             turn = _mock_turn(
                 text, today=today, stage=stage, ctx=ctx, tokens=tokens, context=context or {}
             )
+            turn = _ground_payment_date(turn, text, today, stage, context or {})
             return _resolve(turn, tokens, stage, "mock")
         from langchain_anthropic import ChatAnthropic
 
@@ -367,6 +725,32 @@ def understand_turn(
             client.with_structured_output(TurnUnderstanding),
             [("system", system), ("human", json.dumps(payload, ensure_ascii=False))],
         )
-        return _resolve(TurnUnderstanding.model_validate(result), tokens, stage, "classified")
+        turn = TurnUnderstanding.model_validate(result)
+        turn = _ground_payment_date(turn, text, today, stage, context or {})
+        for field, evidence in (
+            ("amount_cop", turn.amount_evidence),
+            ("installments", turn.installments_evidence),
+        ):
+            value = getattr(turn, field)
+            if value is None:
+                if evidence is not None:
+                    raise ValueError("Evidence without a numeric value")
+                continue
+            if evidence is None:
+                if (
+                    field == "installments"
+                    and value == 1
+                    and turn.intent == "promise"
+                    and turn.frequency == "one_off"
+                    and not re.search(r"\b(no|nunca|jamás)\b", text.lower())
+                    and re.search(
+                        r"\b(pago completo|pagar (?:el )?total|pagar todo|todo el saldo)\b",
+                        text.lower(),
+                    )
+                ):
+                    continue
+                raise ValueError("Numeric value requires current-message evidence")
+            evidence.verify(text, value)
+        return _resolve(turn, tokens, stage, "classified")
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return TurnResult(TurnUnderstanding(), "model_error")
