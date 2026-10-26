@@ -11,6 +11,7 @@ from typing import Literal
 from anthropic import APIError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from agents.collections.numbers import NumberEvidence, identity_spans
 from agents.collections.prompts import PromptStage, render_prompt
 
 
@@ -64,6 +65,14 @@ class TurnUnderstanding(BaseModel):
         description="Date explicitly supplied in this turn, resolving relative dates from today. A date-only answer completes existing terms; it does not replace the plan with a full-payment promise.",
     )
     installments: int | None = Field(default=None, gt=0, strict=True)
+    amount_evidence: NumberEvidence | None = Field(
+        default=None,
+        description="Required whenever amount_cop is present. Quote the complete current numeric expression; uno means integer 1, never the string uno.",
+    )
+    installments_evidence: NumberEvidence | None = Field(
+        default=None,
+        description="Required for an explicit installment count. uno/una means 1. May be null only for an inferred single installment from an explicit full-payment request.",
+    )
     acceptance: Literal["none", "conditional", "unconditional_current_offer"] = Field(
         default="none",
         description="Selecting a menu option, supplying a date or choosing installment count is none: it requests a proposal, not an agreement. unconditional_current_offer requires an existing backend pending_offer, awaiting_confirmation stage and unconditional consent to that exact presented schedule without new terms.",
@@ -322,6 +331,19 @@ def understand_turn(
     source text. Links/emails and prior-context numbers are redacted in every stage.
     """
     system = render_prompt("semantic_turn", stage=stage)
+    system += """
+Numeric output contract (required, including the examples above):
+Whenever amount_cop is non-null, also return amount_evidence={"quote": "exact numeric expression"}.
+Whenever installments is explicitly stated, also return installments_evidence with its expression.
+Do NOT omit a stated value to avoid supplying evidence. Extract uno/un/una as integer 1.
+"Puedo dar 1 peso al mes" => amount_cop=1, amount_evidence={"quote":"1"}, installments=null.
+"Quiero una cuota" => installments=1, installments_evidence={"quote":"una"}, amount_cop=null.
+"Puedo pagar doscientos mil pesos al mes" => amount_cop=200000,
+amount_evidence={"quote":"doscientos mil"}. Include all scale words in the quote, no unit labels.
+"250 mil" => amount_cop=250000, amount_evidence={"quote":"250 mil"}; never extract just 250 or mil.
+"1" after asking how many installments => installments=1, installments_evidence={"quote":"1"}.
+Dates and identifiers are not monetary amounts. Keep identifiers as numeric_candidates references.
+"""
     if ctx.provider not in {"mock", "anthropic"}:
         raise ValueError(f"Unsupported provider: {ctx.provider}")
     tokens = []
@@ -330,12 +352,11 @@ def understand_turn(
         stage in {"awaiting_customer", "awaiting_identity"}
         or (context or {}).get("identity_verified") is False
     ):
-
-        def replace(match):
-            tokens.append(match.group())
-            return f"<number_{len(tokens) - 1}>"
-
-        current = re.sub(r"[0-9]+", replace, current)
+        spans = list(identity_spans(current))
+        tokens = [value for _, _, value in spans]
+        for index in reversed(range(len(spans))):
+            start, end, _ = spans[index]
+            current = current[:start] + f"<number_{index}>" + current[end:]
     payload = {
         "current_message": current,
         "numeric_candidates": [
@@ -350,7 +371,8 @@ def understand_turn(
             turn = _mock_turn(
                 text, today=today, stage=stage, ctx=ctx, tokens=tokens, context=context or {}
             )
-            return _resolve(turn, tokens, stage, "mock")
+            result = _resolve(turn, tokens, stage, "mock")
+            return _gate_voice_acceptance(result, ctx)
         from langchain_anthropic import ChatAnthropic
 
         from agents.collections.streaming import internal_model_call
@@ -367,6 +389,36 @@ def understand_turn(
             client.with_structured_output(TurnUnderstanding),
             [("system", system), ("human", json.dumps(payload, ensure_ascii=False))],
         )
-        return _resolve(TurnUnderstanding.model_validate(result), tokens, stage, "classified")
+        turn = TurnUnderstanding.model_validate(result)
+        for field, evidence in (
+            ("amount_cop", turn.amount_evidence),
+            ("installments", turn.installments_evidence),
+        ):
+            value = getattr(turn, field)
+            if value is None:
+                if evidence is not None:
+                    raise ValueError("Evidence without a numeric value")
+                continue
+            if evidence is None:
+                if (
+                    field == "installments"
+                    and value == 1
+                    and turn.intent == "promise"
+                    and turn.frequency == "one_off"
+                    and re.search(
+                        r"\b(pago completo|pagar (?:el )?total|pagar todo|todo el saldo)\b",
+                        text.lower(),
+                    )
+                ):
+                    continue
+                raise ValueError("Numeric value requires current-message evidence")
+            evidence.verify(text, value)
+        return _gate_voice_acceptance(_resolve(turn, tokens, stage, "classified"), ctx)
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return TurnResult(TurnUnderstanding(), "model_error")
+
+
+def _gate_voice_acceptance(result, ctx):
+    if not getattr(ctx, "offer_audio_completed", True) and result.turn.intent == "accept_offer":
+        return TurnResult(TurnUnderstanding(intent="unclear"), result.status)
+    return result

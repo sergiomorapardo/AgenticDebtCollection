@@ -192,6 +192,7 @@ def test_conditional_counteroffer_keeps_financial_meaning(model_call):
         "intent": "counteroffer",
         "acceptance": "conditional",
         "amount_cop": 150000,
+        "amount_evidence": {"quote": "150 mil"},
         "amount_is_capacity": True,
     }
     result = understand_turn(
@@ -353,6 +354,7 @@ def test_positive_capacity_survives_prior_refusal_and_limited_funds(model_call):
     response["result"] = {
         "intent": "counteroffer",
         "amount_cop": 250000,
+        "amount_evidence": {"quote": "250 mil"},
         "amount_is_capacity": True,
         "frequency": "monthly",
     }
@@ -407,9 +409,145 @@ def test_other_intents_cannot_carry_unconditional_acceptance(model_call, intent,
         "intent": intent,
         "acceptance": "unconditional_current_offer",
         "amount_cop": 200000,
+        "amount_evidence": {"quote": "200 mil"},
     }
     result = understand_turn("propondría 200 mil", ctx=CONTEXT, today=TODAY, stage=stage)
     assert result.status == "classified"
     assert result.turn.intent == intent
     assert result.turn.acceptance == "none"
     assert result.turn.amount_cop == 200000
+
+
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("uno", 1),
+        ("una", 1),
+        ("250 mil", 250000),
+        ("doscientos mil", 200000),
+        ("1,5 millones", 1500000),
+        ("600.000", 600000),
+        ("600,000", 600000),
+    ],
+)
+def test_numbers_are_strict_integers_grounded_in_current_words(model_call, quote, value):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "amount_cop": value,
+        "amount_evidence": {"quote": quote},
+    }
+    result = understand_turn(f"puedo pagar {quote} pesos", ctx=CONTEXT, today=TODAY, stage="ready")
+    assert result.status == "classified"
+    assert type(result.turn.amount_cop) is int and result.turn.amount_cop == value
+
+
+@pytest.mark.parametrize(
+    "value,evidence",
+    [
+        ("uno", {"quote": "uno"}),
+        ("1", {"quote": "uno"}),
+        (True, {"quote": "uno"}),
+        (1000, {"quote": "uno"}),
+        (1, None),
+        (1, {"quote": "1"}),
+    ],
+)
+def test_numeric_coercion_invention_and_missing_evidence_fail_closed(model_call, value, evidence):
+    _, response = model_call
+    response["result"] = {"intent": "negotiate", "amount_cop": value, "amount_evidence": evidence}
+    result = understand_turn("uno", ctx=CONTEXT, today=TODAY, stage="ready")
+    assert result.status == "model_error" and result.turn.amount_cop is None
+
+
+def test_one_installment_is_not_one_peso(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 1,
+        "installments_evidence": {"quote": "una"},
+    }
+    result = understand_turn("una cuota", ctx=CONTEXT, today=TODAY, stage="ready")
+    assert result.turn.installments == 1 and result.turn.amount_cop is None
+
+
+@pytest.mark.parametrize(
+    "text,stage,intent,field,expected",
+    [
+        ("código uno uno uno uno", "awaiting_identity", "verification_code", "code_token", "1111"),
+        ("código 0 0 1 1", "awaiting_identity", "verification_code", "code_token", "0011"),
+        ("cédula 1.000.000.001", "awaiting_customer", "identity", "identity_token", "1000000001"),
+    ],
+)
+def test_dictated_identifiers_preserve_exact_digits_and_checkpoint_binding(
+    model_call, text, stage, intent, field, expected
+):
+    from agents.collections.semantic_state import bind_understanding, current_understanding
+
+    _, response = model_call
+    response["result"] = {"intent": intent, field: 0}
+    result = understand_turn(text, ctx=CONTEXT, today=TODAY, stage=stage)
+    assert result.status == "classified"
+    assert (result.identity_candidate or result.verification_candidate) == expected
+    state = {"event_id": "voice-number", "text": text}
+    state["semantic_result"] = bind_understanding(state, result)
+    assert current_understanding(state) == result
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("uno", "1"),
+        ("quiero una cuota", "quiero 1 cuota"),
+        ("puedo dar doscientos mil pesos", "puedo dar 200000 pesos"),
+        ("250 mil al mes", "250000 al mes"),
+        ("1,5 millones", "1500000"),
+        ("ciento treinta y un pesos", "131 pesos"),
+        ("una persona, un asesor", "una persona, un asesor"),
+        ("¿Puedo hablar con alguien?", "¿Puedo hablar con alguien?"),
+    ],
+)
+def test_transcripts_render_spoken_numbers_as_digits(text, expected):
+    from agents.collections.numbers import normalize_transcript_numbers
+
+    assert normalize_transcript_numbers(text) == expected
+    assert normalize_transcript_numbers(expected) == expected
+
+
+@pytest.mark.parametrize("text", ["0011", "cero cero uno uno", "0 0 1 1"])
+def test_identifier_transcription_retains_leading_zeroes(text):
+    from agents.collections.numbers import normalize_transcript_numbers
+
+    first_pass = normalize_transcript_numbers(text)
+    assert normalize_transcript_numbers(first_pass, identifiers=True) == "0011"
+
+
+def test_voice_authority_rejects_acceptance_until_offer_audio_completed(model_call):
+    _, response = model_call
+    response["result"] = {"intent": "accept_offer", "acceptance": "unconditional_current_offer"}
+    ctx = SimpleNamespace(provider="anthropic", model=CONTEXT.model, offer_audio_completed=False)
+    result = understand_turn("confirmo", ctx=ctx, today=TODAY, stage="awaiting_confirmation")
+    assert result.turn.intent == "unclear" and result.turn.acceptance == "none"
+
+
+@pytest.mark.parametrize(
+    "text,quote,value,valid",
+    [
+        ("Quiero una cuota", "una cuota", 1, True),
+        ("Puedo dar 1 peso", "1 peso", 1, True),
+        ("Puedo dar 250 mil", "250", 250, False),
+        ("Puedo dar 250 mil", "mil", 1000, False),
+        ("Puedo dar 1,5 millones", "1", 1, False),
+        ("Puedo dar -1", "1", 1, False),
+        ("no uno sino dos", "uno sino dos", 2, False),
+    ],
+)
+def test_evidence_accepts_unit_labels_but_not_cropped_expressions(text, quote, value, valid):
+    from agents.collections.numbers import NumberEvidence
+
+    evidence = NumberEvidence(quote=quote)
+    if valid:
+        evidence.verify(text, value)
+    else:
+        with pytest.raises(ValueError):
+            evidence.verify(text, value)

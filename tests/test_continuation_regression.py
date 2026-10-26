@@ -418,7 +418,12 @@ def test_reopened_studio_menu_waits_for_a_choice_without_repeating(
     assert len(captured) == 3
     model_stub(
         monkeypatch,
-        {"intent": "negotiate", "installments": 3, "payment_date": "2026-10-20"},
+        {
+            "intent": "negotiate",
+            "installments": 3,
+            "installments_evidence": {"quote": "tres"},
+            "payment_date": "2026-10-20",
+        },
         captured,
     )
     proposal = send("la de tres, empezando mañana", "select-plan")
