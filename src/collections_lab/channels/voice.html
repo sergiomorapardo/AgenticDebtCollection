@@ -122,6 +122,19 @@ async function playResponse(ticket){stopPlayback();if(state.audio_format==='pcm_
  audio.onerror=()=>{if(ticket===epoch){setMode('waiting');showNotice('No pudimos reproducir el audio. Tu respuesta está guardada.','Regenerar audio',()=>act('retry'));}};
  try{await audio.play();if(ticket===epoch){showNotice(null);setMode('speaking');}}catch{if(ticket===epoch){setMode('waiting');showNotice('Tu navegador necesita un toque para activar el sonido.','Escuchar mensaje',()=>playResponse(ticket));}}
 }
+function waitForAudioStartup(audio,signal){
+ return new Promise((resolve,reject)=>{
+  let delay=null,ready=false;
+  const finish=error=>{clearTimeout(deadline);clearTimeout(delay);audio.removeEventListener('canplaythrough',loaded);audio.removeEventListener('error',failed);signal.removeEventListener('abort',aborted);if(error)reject(error);else resolve();};
+  const loaded=()=>{if(ready)return;ready=true;clearTimeout(deadline);delay=setTimeout(()=>finish(),1000);};
+  const failed=()=>finish(new Error('Audio no disponible.'));
+  const aborted=()=>finish(new Error('Reproducción cancelada.'));
+  const deadline=setTimeout(failed,15000);
+  audio.addEventListener('canplaythrough',loaded);audio.addEventListener('error',failed);signal.addEventListener('abort',aborted,{once:true});
+  if(signal.aborted){aborted();return;}
+  audio.preload='auto';if(audio.readyState>=4)loaded();else audio.load();
+ });
+}
 async function playPCM(ticket){
  const id=state.audio_id,url=state.audio_url;
  const current={controller:new AbortController(),audio:null,objectUrl:null};player=current;
@@ -141,6 +154,8 @@ async function playPCM(ticket){
   const audio=new Audio(current.objectUrl);current.audio=audio;
   audio.onended=()=>{if(ticket===epoch&&player===current&&id===state?.audio_id){stopPlayback();setMode('thinking');act('playback',{audio_id:id},{ticket});}};
   audio.onerror=()=>{if(ticket!==epoch||player!==current)return;stopPlayback();stopCapture();setMode('waiting');showNotice('No pudimos reproducir el audio. El turno está guardado.','Reintentar audio',()=>act('retry'));};
+  await waitForAudioStartup(audio,current.controller.signal);
+  if(ticket!==epoch||player!==current)return;
   try{await audio.play();if(ticket===epoch&&player===current){showNotice(null);setMode('speaking');}}
   catch{if(ticket!==epoch||player!==current)return;stopPlayback();setMode('waiting');showNotice('Tu navegador necesita un toque para activar el sonido.','Escuchar mensaje',()=>playResponse(ticket));}
  }catch(error){if(ticket!==epoch||player!==current)return;stopPlayback();stopCapture();setMode('waiting');showNotice('No pudimos completar el audio. El turno está guardado.','Reintentar audio',()=>act('retry'));}
@@ -153,7 +168,7 @@ async function prepareMic(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error('Usa la respuesta escrita; este navegador no permite grabar.');
   const input=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
   if(ticket!==epoch||['ended','closing'].includes(mode)){input.getTracks().forEach(track=>track.stop());return;}
-  // Capture analysis and playback share one context instead of opening competing audio contexts.
+  // A single context analyzes capture; speech uses the native audio element.
   audioContext??=new AudioContext();
   try{await audioContext.resume();}catch(error){input.getTracks().forEach(track=>track.stop());throw error;}
   if(ticket!==epoch||['ended','closing'].includes(mode)){input.getTracks().forEach(track=>track.stop());return;}

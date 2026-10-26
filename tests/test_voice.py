@@ -453,16 +453,16 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const html=fs.readFileSync(process.argv[2],'utf8'),full=html.split('<script>')[1].split('</script>')[0];
 new vm.Script(full);
 const script=full.split('// The viewer')[0].replace('restoreSession();','');
-function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,255,255],blocked=false}={}){
- const calls=[],audios=[],blobs=new Map(),revoked=[],timers=new Map(),elements=new Map();let eof=false,clock=1,rms=0,aborted=false,reads=0;
+function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,255,255],blocked=false,holdStartup=false,holdReady=false}={}){
+ const calls=[],audios=[],blobs=new Map(),revoked=[],startupDelays=[],timers=new Map(),elements=new Map();let eof=false,clock=1,rms=0,aborted=false,reads=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
  const document={documentElement:{dataset:{}},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
  class Context{constructor(){this.state='running';}resume(){return Promise.resolve();}createBufferSource(){throw new Error('Must use native playback');}createMediaStreamSource(){return {connect(){},disconnect(){}};}createAnalyser(){return {fftSize:2048,disconnect(){},getFloatTimeDomainData(data){data.fill(rms);}};}}
  class Recorder{static isTypeSupported(){return true;}constructor(){this.state='inactive';}start(){this.state='recording';}stop(){this.state='inactive';setImmediate(()=>this.onstop?.());}}
- class Audio{constructor(url){this.url=url;audios.push(this);}async play(){if(blocked)throw new Error('autoplay blocked');this.playing=true;}pause(){this.paused=true;}removeAttribute(){}load(){}end(){this.ended=true;this.onended?.();}}
+ class Audio{constructor(url){this.url=url;this.readyState=0;this.listeners=new Map();audios.push(this);}addEventListener(name,fn){this.listeners.set(name,fn);}removeEventListener(name){this.listeners.delete(name);}ready(){this.readyState=4;this.listeners.get('canplaythrough')?.();}async play(){if(blocked)throw new Error('autoplay blocked');this.playing=true;}pause(){this.paused=true;}removeAttribute(){}load(){if(!holdReady)this.ready();}end(){this.ended=true;this.onended?.();}}
  let releaseEnd;const end=new Promise(resolve=>{releaseEnd=()=>{eof=true;resolve({done:true});};});
  const sandbox={console,document,Audio,AudioContext:Context,MediaRecorder:Recorder,Blob,AbortController,Uint8Array,Float32Array,ArrayBuffer,DataView,Date,crypto:require('node:crypto').webcrypto,URL:{createObjectURL(blob){const url='blob:'+blobs.size;blobs.set(url,blob);return url;},revokeObjectURL(url){revoked.push(url);}},
- performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
+ performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},setTimeout(fn,ms){if(ms===1000){startupDelays.push(ms);return setTimeout(fn,holdStartup?60000:1);}return setTimeout(fn,ms);},clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
  fetch:async(url,options={})=>{
   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{reads++;if(index++===0)return {value:new Uint8Array(bytes.slice(0,1)),done:false};if(index===2)return {value:new Uint8Array(bytes.slice(1)),done:false};if(failure)throw new Error('truncated');return Promise.race([end,new Promise((_,reject)=>{const abort=()=>{aborted=true;reject(new Error('aborted'));};if(options.signal.aborted)abort();else options.signal.addEventListener('abort',abort,{once:true});})]);}})}};}
   calls.push({url,body:options.body,headers:options.headers});
@@ -472,13 +472,13 @@ function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,
  }};
  const context=vm.createContext(sandbox);vm.runInContext(script,context);const run=code=>vm.runInContext(code,context);
  run("state={session_id:'call',audio_id:'current.pcm',audio_url:'/api/audio/current.pcm',audio_format:'pcm_s16le_24000',finished:false,history:[]};epoch=1;");
- return {run,calls,audios,blobs,revoked,releaseEnd,get reads(){return reads;},get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();},close(){run('releaseMic();stopPlayback();');}};
+ return {run,calls,audios,blobs,revoked,startupDelays,releaseEnd,get reads(){return reads;},get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();},close(){run('releaseMic();stopPlayback();');}};
 }
 const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out');};
 (async()=>{
  const first=fixture(),loading=first.run('playResponse(epoch)');await until(()=>first.reads>=3);
  assert.equal(first.audios.length,0,'no partial audio playback');assert.equal(first.calls.length,0);
- first.releaseEnd();await loading;assert.equal(first.run('mode'),'speaking');
+ first.releaseEnd();await loading;assert.equal(first.run('mode'),'speaking');assert.deepEqual(first.startupDelays,[1000]);
  const wav=await first.blobs.values().next().value.arrayBuffer(),view=new DataView(wav);
  assert.equal(Buffer.from(wav).subarray(0,4).toString(),'RIFF');assert.equal(Buffer.from(wav).subarray(8,12).toString(),'WAVE');
  assert.equal(view.getUint32(4,true),44);assert.equal(view.getUint16(20,true),1);assert.equal(view.getUint16(22,true),1);assert.equal(view.getUint32(24,true),24000);assert.equal(view.getUint32(28,true),48000);assert.equal(view.getUint16(32,true),2);assert.equal(view.getUint16(34,true),16);assert.equal(view.getUint32(40,true),8);
@@ -497,6 +497,8 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  const blocked=fixture({blocked:true}),blockedPlayback=blocked.run('playResponse(epoch)');blocked.releaseEnd();await blockedPlayback;assert.equal(blocked.run('mode'),'waiting');assert.equal(blocked.calls.length,0);assert.equal(blocked.revoked.length,1);blocked.close();
  const failed=fixture(),failedPlayback=failed.run('playResponse(epoch)');failed.releaseEnd();await failedPlayback;failed.audios[0].onerror();assert.equal(failed.run('mode'),'waiting');assert.equal(failed.calls.length,0);assert.equal(failed.revoked.length,1);failed.close();
  const retry=fixture({interruptFailure:true}),retryPlayback=retry.run('playResponse(epoch)');retry.releaseEnd();await retryPlayback;await retry.run('prepareMic()');retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();finishRecording();");await until(()=>retry.run('mode')==='waiting');retry.run('recovery()');await until(()=>retry.calls.some(c=>c.url==='/api/recording'));const interrupts=retry.calls.filter(c=>c.url==='/api/interrupt');assert.equal(interrupts.length,2);assert.equal(interrupts[0].headers['X-Request-ID'],interrupts[1].headers['X-Request-ID']);retry.close();
+ const preparing=fixture({holdReady:true}),preparation=preparing.run('playResponse(epoch)');preparing.releaseEnd();await until(()=>preparing.audios.length===1);assert.equal(preparing.startupDelays.length,0);assert.ok(!preparing.audios[0].playing);preparing.audios[0].ready();await preparation;assert.deepEqual(preparing.startupDelays,[1000]);assert.ok(preparing.audios[0].playing);preparing.close();
+ const paused=fixture({holdStartup:true}),pause=paused.run('playResponse(epoch)');paused.releaseEnd();await until(()=>paused.startupDelays.length===1);assert.ok(!paused.audios[0].playing);paused.run('epoch++;stopPlayback();');await pause;assert.ok(!paused.audios[0].playing);assert.equal(paused.calls.length,0);assert.equal(paused.revoked.length,1);paused.close();
  console.log('Native WAV: exact samples, complete download, interruption, cancellation, mic races, autoplay recovery, ended-only acknowledgment passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
