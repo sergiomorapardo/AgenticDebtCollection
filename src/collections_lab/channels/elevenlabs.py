@@ -77,6 +77,7 @@ class ElevenLabsSpeech:
 
     async def stream_synthesize(self, text: str):
         """Yield mono signed 16-bit little-endian PCM at 24 kHz without buffering an MP3."""
+        # Keep the model accepted in speaker tests; Flash clipped this voice's opening phoneme.
         text = _spoken_text(text)
         try:
             async with (
@@ -92,7 +93,11 @@ class ElevenLabsSpeech:
                     "POST",
                     f"text-to-speech/{self.voice_id}/stream",
                     params={"output_format": "pcm_24000"},
-                    json={"text": text, "model_id": "eleven_flash_v2_5", "language_code": "es"},
+                    json={
+                        "text": text,
+                        "model_id": "eleven_multilingual_v2",
+                        "language_code": "es",
+                    },
                 ) as response,
             ):
                 response.raise_for_status()

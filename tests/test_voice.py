@@ -119,7 +119,7 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         assert request.url.path.endswith("/voice-id/stream")
         assert request.url.params["output_format"] == "pcm_24000"
         payload = json.loads(request.content)
-        assert payload["model_id"] == "eleven_flash_v2_5"
+        assert payload["model_id"] == "eleven_multilingual_v2"
         assert payload["text"] == "600000 pesos"
         return httpx.Response(200, stream=Chunks(), headers={"content-type": "audio/pcm"})
 
@@ -466,9 +466,9 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  await until(()=>first.nodes.length===2);
  assert.equal(first.calls.length,0); // The first fragment is scheduled before network EOF.
  const initial=first.nodes[0].buffer.getChannelData(0);
- assert.equal(initial.length,14400);assert.ok(initial.slice(0,12000).every(sample=>sample===0));
- assert.equal(initial[12000],1/32768);assert.equal(initial[12001],2/32768);
- assert.ok(initial.slice(12002).every(sample=>sample===771/32768));
+ assert.equal(initial.length,6000);assert.ok(initial.slice(0,3600).every(sample=>sample===0));
+ assert.equal(initial[3600],1/32768);assert.equal(initial[3601],2/32768);
+ assert.ok(initial.slice(3602).every(sample=>sample===771/32768));
  assert.equal(first.nodes[1].buffer.getChannelData(0).length,2400); // Silence only at the start.
  assert.equal(first.nodes[1].when,first.nodes[0].when+first.nodes[0].buffer.duration);
  await first.run('prepareMic()');
@@ -486,7 +486,7 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  first.run('releaseMic();stopPlayback();');
  const second=fixture();const complete=second.run('playResponse(epoch)');
  await until(()=>second.nodes.length>0);second.releaseEnd();await complete;
- const speech=second.nodes.flatMap((node,index)=>Array.from(node.buffer.getChannelData(0)).slice(index===0?12000:0));
+ const speech=second.nodes.flatMap((node,index)=>Array.from(node.buffer.getChannelData(0)).slice(index===0?3600:0));
  assert.equal(speech.length,4802);assert.deepEqual(speech.slice(0,2),[1/32768,2/32768]);
  assert.ok(speech.slice(2).every(sample=>sample===771/32768)); // No discarded/repeated samples across frames or EOF.
  assert.equal(second.calls.filter(call=>call.url==='/api/playback').length,1);
@@ -498,8 +498,8 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  const tiny=fixture(false,false,true);const tinyPlaying=tiny.run('playResponse(epoch)');
  await new Promise(resolve=>setTimeout(resolve,20));assert.equal(tiny.nodes.length,0);
  tiny.releaseEnd();await tinyPlaying;
- assert.equal(tiny.nodes.length,1);assert.equal(tiny.nodes[0].buffer.getChannelData(0).length,12002);
- assert.deepEqual(Array.from(tiny.nodes[0].buffer.getChannelData(0)).slice(12000),[1/32768,2/32768]);
+ assert.equal(tiny.nodes.length,1);assert.equal(tiny.nodes[0].buffer.getChannelData(0).length,3602);
+ assert.deepEqual(Array.from(tiny.nodes[0].buffer.getChannelData(0)).slice(3600),[1/32768,2/32768]);
  tiny.run('releaseMic();stopPlayback();');
  const malformed=fixture(false,false,true,true);const malformedPlaying=malformed.run('playResponse(epoch)');
  malformed.releaseEnd();await malformedPlaying;

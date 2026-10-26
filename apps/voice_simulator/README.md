@@ -48,7 +48,7 @@ Open http://127.0.0.1:7860. Open the HTML through this server, not as a `file://
 The server binds only to loopback. Microphone capture requires browser permission.
 The API key needs Text to Speech and Speech to Text access, and the voice must be
 available to your account through the API. Defaults are `scribe_v2` and
-`eleven_flash_v2_5` with mono 24 kHz signed 16-bit PCM over the
+`eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 The browser uses Web Audio and fetch streaming; it does not download/decode a complete MP3.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
@@ -233,7 +233,11 @@ before EOF, odd-byte chunk boundaries, speech interruption, queued-source cancel
 recording pre-roll, and acknowledgment only after complete playback. API tests cover partial
 streams, explicit retries, cancellation cleanup, and interrupted-offer acceptance protection.
 PCM playback groups network fragments into 100 ms frames and prefixes the first frame with
-500 ms of silence to give the output device time to start without consuming the first word.
+150 ms of silence to give the output device time to start without consuming the first word.
+Speaker comparison of cached source audio found a clipped opening with Flash for the configured
+voice, including a generation with a leading SSML pause; the user confirmed a complete opening
+with Multilingual v2. Streaming now uses the same Multilingual v2 model as MP3 synthesis.
+The browser prefix only allows output startup; it cannot repair a missing generated phoneme.
 Initial playback waits for the pending microphone permission/setup to settle (grant or denial)
 so opening capture cannot overlap the first spoken word. Capture analysis and playback share
 one AudioContext; releasing the microphone disconnects its nodes without closing playback.
