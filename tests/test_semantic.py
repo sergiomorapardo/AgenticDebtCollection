@@ -951,7 +951,13 @@ def test_unsupported_date_keeps_separate_current_financial_terms(model_call, tex
 def test_morning_is_not_tomorrow(model_call, text, expected):
     _, response = model_call
     response["result"] = {"intent": "unclear", "payment_date": "2026-10-20"}
-    result = understand_turn(text, ctx=CONTEXT, today=date(2026, 10, 19), stage="awaiting_terms")
+    result = understand_turn(
+        text,
+        ctx=CONTEXT,
+        today=date(2026, 10, 19),
+        stage="awaiting_terms",
+        context={"dialogue": {"awaiting": "date"}},
+    )
     assert result.status == "classified" and result.turn.payment_date == expected
     assert result.turn.date_clarification == (None if expected else "multiple")
 
@@ -993,3 +999,26 @@ def test_explicit_date_with_menu_choice_still_resolves(model_call):
     )
     assert result.status == "classified" and result.turn.installments == 3
     assert result.turn.payment_date == date(2026, 10, 20)
+
+
+@pytest.mark.parametrize(
+    "stage,intent,text",
+    [
+        ("ready", "continue", "Sí, siga, estuve ocupado toda la mañana"),
+        ("awaiting_confirmation", "accept_offer", "Sí, confirmo, lo pago en la mañana"),
+    ],
+)
+def test_morning_remark_preserves_non_date_intent(model_call, stage, intent, text):
+    _, response = model_call
+    acceptance = "unconditional_current_offer" if intent == "accept_offer" else "none"
+    response["result"] = {"intent": intent, "acceptance": acceptance, "payment_date": "2026-10-20"}
+    result = understand_turn(
+        text,
+        ctx=CONTEXT,
+        today=TODAY,
+        stage=stage,
+        context={"draft_terms": {"payment_date": "2026-10-20"}},
+    )
+    assert result.status == "classified" and result.turn.intent == intent
+    assert result.turn.payment_date is None and result.turn.date_clarification is None
+    assert result.turn.acceptance == acceptance

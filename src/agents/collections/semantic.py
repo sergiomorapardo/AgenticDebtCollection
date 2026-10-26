@@ -52,9 +52,13 @@ def _date_references(text, context):
     dialogue = context.get("dialogue", {})
     pending = dialogue.get("pending_date") if dialogue.get("awaiting") == "date" else None
     terms = context.get("draft_terms", {})
-    awaiting_date = bool(pending) or (
-        not terms.get("payment_date")
-        and (terms.get("installments") or terms.get("route") == "promise")
+    awaiting_date = (
+        dialogue.get("awaiting") == "date"
+        or bool(pending)
+        or (
+            not terms.get("payment_date")
+            and (terms.get("installments") or terms.get("route") == "promise")
+        )
     )
     references = []
     occupied = []
@@ -143,7 +147,7 @@ def _date_references(text, context):
                     occurrence="this" if normalized in {"este", "esta semana"} else "next",
                 )
             )
-    return references, normalized
+    return references, normalized, awaiting_date
 
 
 def _resolve_date_reference(reference, today):
@@ -192,7 +196,7 @@ def _ground_payment_date(turn, text, today, stage, context):
         or context.get("identity_verified") is False
     ):
         return turn.model_copy(update={"date_reference": None, "date_clarification": None})
-    references, normalized = _date_references(text, {**context, "today": today})
+    references, normalized, awaiting_date = _date_references(text, {**context, "today": today})
     dialogue = context.get("dialogue", {})
     pending = dialogue.get("pending_date") if dialogue.get("awaiting") == "date" else None
     date_only = normalized
@@ -220,8 +224,13 @@ def _ground_payment_date(turn, text, today, stage, context):
     ):
         references = [PaymentDateReference.model_validate(pending)]
         pending_confirmation = True
+    morning_only = not references and re.search(r"\bla\s+manana\b", normalized)
+    if morning_only and not awaiting_date and turn.date_reference is None:
+        # Time-of-day remarks neither invent a payment date nor change a
+        # continuation/confirmation into a date negotiation.
+        turn = turn.model_copy(update={"payment_date": None})
     unsupported = not references and (
-        turn.date_reference is not None or re.search(r"\bla\s+manana\b", normalized)
+        turn.date_reference is not None or (morning_only and awaiting_date)
     )
     if unsupported:
         # An unsupported date is a clarification, never a provider failure or an
@@ -655,7 +664,8 @@ Do NOT omit a stated value to avoid supplying evidence. Extract uno/un/una as in
 amount_evidence={"quote":"doscientos mil"}. Include all scale words in the quote, no unit labels.
 "250 mil" => amount_cop=250000, amount_evidence={"quote":"250 mil"}; never extract just 250 or mil.
 "1" after asking how many installments => installments=1, installments_evidence={"quote":"1"}.
-Date output contract: Do not guess missing month/year in partial dates. Return date_reference
+Date output contract: Quote only date words, excluding installment counts and monetary amounts.
+Do not guess missing month/year in partial dates. Return date_reference
 with the exact current quote and explicitly supplied components; weekday uses Monday=0.
 For el viernes return weekday=4 and occurrence=unspecified, with day/month/year null.
 For el 20 return day=20 with month/year/weekday null. A date-only answer is not acceptance.

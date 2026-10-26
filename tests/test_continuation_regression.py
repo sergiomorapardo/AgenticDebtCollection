@@ -631,3 +631,24 @@ def test_unsupported_date_keeps_new_installments_until_complete_proposal(
     proposal = send("el 20 de octubre del 2026 en la mañana")
     assert proposal["stage"] == "awaiting_confirmation" and "200,000 COP" in proposal["text"]
     assert "2026-10-20" in proposal["text"] and not ctx.repository.agreements()
+
+
+def test_morning_remark_does_not_start_date_negotiation(date_conversation, monkeypatch):
+    send, ctx, sid = date_conversation()
+    model_stub(monkeypatch, {"intent": "continue"}, [])
+    ctx.provider = "anthropic"
+    reply = send("Sí, siga, estuve ocupado toda la mañana")
+    assert reply["stage"] == "ready" and "día, mes y año" not in reply["text"]
+    assert ctx.repository.get_session(sid)["dialogue"].get("awaiting") != "date"
+    assert not ctx.repository.agreements()
+
+
+def test_time_of_day_remark_does_not_discard_confirmed_calendar(date_conversation, monkeypatch):
+    send, ctx, _ = date_conversation()
+    send("quiero 3 cuotas desde 2026-10-20")
+    model_stub(
+        monkeypatch, {"intent": "accept_offer", "acceptance": "unconditional_current_offer"}, []
+    )
+    ctx.provider = "anthropic"
+    reply = send("Sí, confirmo, lo pago en la mañana")
+    assert reply["stage"] == "agreed" and len(ctx.repository.agreements()) == 1
