@@ -240,10 +240,9 @@ real transfer. The legacy false-closure signature remains unchanged for historic
 | --- | --- | --- | --- |
 | UX-03 | Verify a returning customer or ask `¿Qué acordamos?` | Keep transcript excerpts/internal summaries out of chat; show authoritative account facts and next step; preserve terminal outcomes and replay | `test_verified_recall_keeps_transcripts_internal_and_preserves_outcomes` |
 | UX-04 | Historical false closure followed by complaint | Acknowledge poor service without technical recovery narration; require explicit continuation; preserve history and create no agreement | Same parametrized test, `legacy` case |
-
 | UX-05 | `987654321` → `1111` → `ya te lo pase, era 987654321` | Acknowledge missing account; explain premature code; accept corrected fixture ID without consuming verification attempts | `test_screenshot_unknown_id_then_code_then_correction`; Agent Server CI smoke |
 | UX-06 | Multiple numbers or unknown ID of another length | Ask for one ID or report no account; never guess, truncate, bind identity, or call onboarding model | Studio identification regression tests |
-
+| UX-07 | Returning customer whose last session stopped only collection (`terminar` or repeated refusal) | Reply stays `finished` and adds `continuation_available: true` (the customer *may* resume, not *will*) so a channel keeps listening; only a newly understood request resumes; stop/decline, agreements, handoffs and failed verification never carry it | `test_recovered_closure_signals_customer_led_continuation_without_reopening`, `test_recovered_ineligible_outcomes_do_not_signal_continuation`, `test_legacy_false_closure_signals_continuation_until_the_customer_stops` |
 
 ## Contextual continuation after a historical false closure
 

@@ -2,7 +2,9 @@
 
 from langgraph.runtime import Runtime
 
+from agents.collections.conversation import continuation_available
 from agents.collections.runtime import AppContext, resolve_context
+from agents.collections.semantic_state import current_understanding
 from agents.collections.state import State
 
 
@@ -39,6 +41,9 @@ def compose_response(state: State, runtime: Runtime[AppContext]) -> dict:
             "agreement_id": session.get("agreement_id"),
             "finished": session["stage"] in {"agreed", "closed", "handoff"},
         }
+        understanding = current_understanding(state)
+        if continuation_available(session, understanding.turn.intent if understanding else None):
+            reply["continuation_available"] = True
         if state.get("streamed_reply"):
             reply.update(state["streamed_reply"])
         ctx.repository.save_turn({**state, "session": session}, reply)
