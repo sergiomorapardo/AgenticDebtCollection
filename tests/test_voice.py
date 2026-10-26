@@ -144,6 +144,9 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         ("200000 COP 3 cuotas", "200000 pesos 3 cuotas"),
         ("Importes en COP; COPIA del acuerdo.", "Importes en pesos; COPIA del acuerdo."),
         ("Saldo: 12,50 COP.", "Saldo: 12,50 pesos."),
+        ("Saldo: 1.000 COP.", "Saldo: 1000 pesos."),
+        ("Saldo: $1 COP.", "Saldo: 1 peso."),
+        ("Saldo: 12,50 cop.", "Saldo: 12,50 pesos."),
         ("Cuota 200\u00a0COP el 2026-10-20.", "Cuota 200 pesos el 2026-10-20."),
     ],
 )

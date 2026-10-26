@@ -19,6 +19,7 @@ def _spoken_text(text: str) -> str:
 
     def amount(match: re.Match) -> str:
         value = match[1]
+        # The backend uses integer pesos; consistent three-digit groups are thousands.
         if re.fullmatch(r"\d{1,3}([.,])\d{3}(?:\1\d{3})*", value):
             value = value.replace(",", "").replace(".", "")
         return f"{value} {'peso' if value == '1' else 'pesos'}"
