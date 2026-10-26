@@ -27,7 +27,7 @@ sequenceDiagram
     API->>Speech: Stream validated response as PCM
     Speech-->>API: Audio chunks
     API-->>UI: Audio chunks
-    UI->>User: Play chunks as they arrive
+    UI->>User: Play complete WAV with optional output activation
     User->>UI: Speak to interrupt
     UI->>API: Interrupt current audio ID
     API->>Speech: Cancel synthesis stream
@@ -51,10 +51,15 @@ available to your account through the API. Defaults are `scribe_v2` and
 `eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 The browser receives the complete PCM recording, wraps it losslessly in a mono WAV header,
-and plays it through the native audio element, matching the B sample. Once the microphone
-setup and the audio element are ready, a cancellable one-second timer settles before playback.
-It adds no
-tones, silence, or per-frame scheduling. Playback waits for the complete download.
+and plays it through the native audio element. **Evitar cortes al inicio del audio** is enabled
+by default: it prepends a soft 1.5-second activation signal within the same WAV, preserving
+all speech bytes. This addresses outputs that discard initial sound after silence. A local
+microphone capture on an HDMI monitor lost the original greeting's first word; with this
+signal, the captured onset and greeting were retained. A pre-playback timer did not help.
+The option can be disabled for other outputs; its preference persists when storage is available.
+It adds 1.5 seconds before each response, including retries. Playback still waits for the complete
+download and microphone/audio readiness; interruption and hangup also stop the activation signal.
+No system audio settings are changed. This measured workaround is not a guarantee for every device.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
 Both speech paths render `COP` as `pesos` (`1 COP` as `un peso`) only in the provider request:
 `600,000 COP` stays written in the conversation while speech receives `seiscientos mil pesos`.
