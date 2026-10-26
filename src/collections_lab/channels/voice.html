@@ -94,13 +94,13 @@ let state=null, mode='idle', epoch=0, recorder=null, stream=null, player=null, r
 let startedAt=null, stoppedAt=null, recordTimer=null, discardRecording=false;
 let audioContext=null, micSource=null, analyser=null, micTimer=null, capture=null, micPending=null;
 const VOICE_THRESHOLD=.035, VOICE_HOLD_MS=120, SILENCE_MS=900, MAX_RECORDING_MS=60000;
-const PCM_RATE=24000, PCM_FRAME_BYTES=4800, PCM_STARTUP_SAMPLES=3600; // 100 ms frames; 150 ms output warm-up after microphone setup.
+const PCM_RATE=24000;
 const labels={idle:'Listo para conversar',connecting:'Conectando…',ready:'Es tu turno',recording:'Te escucho…',thinking:'Preparando respuesta…',speaking:'El agente está hablando',waiting:'Respuesta lista',ended:'Llamada terminada',closing:'Terminando llamada…'};
 function setMode(next){mode=next;$('card').dataset.mode=next;$('status').textContent=labels[next];const ready=next==='ready'||next==='speaking';$('mic').disabled=!(ready||next==='recording');$('text').disabled=!ready;$('send').disabled=!ready;$('start').disabled=next==='connecting';$('start').hidden=!['idle','connecting','ended'].includes(next);$('controls').hidden=['idle','connecting','ended'].includes(next);$('hangup').disabled=next==='closing';$('mic-symbol').setAttribute('href',next==='recording'?'#stop-icon':'#mic-icon');$('mic').setAttribute('aria-label',next==='recording'?'Detener y enviar respuesta':'Grabar respuesta');$('mic-label').textContent=next==='recording'?'Enviar':'Responder';$('hint').textContent=next==='recording'?'Habla; enviaremos al terminar. También puedes pulsar Enviar.':next==='ready'?'Habla o pulsa el micrófono para responder.':next==='speaking'?'Puedes interrumpir hablando o pulsando Responder. Usa auriculares para evitar eco.':next==='ended'?'Gracias por conversar. Puedes iniciar una llamada nueva.':next==='thinking'?'Estamos procesando tu mensaje.':'El micrófono permanece activo durante la llamada si das permiso.';if(next==='ended')releaseMic();if(ready)armCapture();}
 function showNotice(message, label=null, fn=null){$('notice').hidden=!message;$('notice-text').textContent=message||'';$('recover').hidden=!label;$('recover').textContent=label||'';recovery=fn;}
 $('recover').onclick=()=>recovery?.();
 function showHistory(){const box=$('messages');box.replaceChildren();for(const item of state?.history||[]){const row=document.createElement('div');row.className='message '+item.role;const who=document.createElement('small');who.textContent=item.role==='user'?'Tú':'Asistente';row.append(who,document.createTextNode(item.content));box.append(row);}box.scrollTop=box.scrollHeight;const last=state?.history?.filter(m=>m.role==='assistant').at(-1);if(last)$('quote').textContent=last.content;$('provider').textContent=state?.provider==='anthropic'?'Conversación con Claude Haiku.':'Conversación de prueba con respuestas simuladas.';}
-function stopPlayback(){if(player?.controller){player.controller.abort();for(const node of player.nodes){node.onended=null;try{node.stop();}catch{}node.disconnect();}player.nodes.clear();}else if(player){player.onended=null;player.onerror=null;player.pause();player.removeAttribute('src');player.load();}player=null;}
+function stopPlayback(){if(player?.controller){player.controller.abort();const audio=player.audio;if(audio){audio.onended=null;audio.onerror=null;audio.pause();audio.removeAttribute('src');audio.load();}if(player.objectUrl)URL.revokeObjectURL(player.objectUrl);}else if(player){player.onended=null;player.onerror=null;player.pause();player.removeAttribute('src');player.load();}player=null;}
 function stopCapture(){if(capture){capture.discard=true;if(capture.recorder.state==='recording')capture.recorder.stop();capture=null;}clearTimeout(recordTimer);}
 function releaseMic(){stopCapture();clearInterval(micTimer);stream?.getTracks().forEach(track=>track.stop());stream=null;micSource?.disconnect();micSource=null;analyser?.disconnect();analyser=null;}
 async function request(action, body={}, key=crypto.randomUUID(), callId=state?.session_id||''){
@@ -124,38 +124,26 @@ async function playResponse(ticket){stopPlayback();if(state.audio_format==='pcm_
 }
 async function playPCM(ticket){
  const id=state.audio_id,url=state.audio_url;
- const current={controller:new AbortController(),nodes:new Set()};player=current;
+ const current={controller:new AbortController(),audio:null,objectUrl:null};player=current;
  try{
-  // Opening capture can reconfigure the output route; do not speak during that transition.
+  setMode('thinking');
+  const response=await fetch(url,{signal:current.controller.signal});if(!response.ok)throw new Error('Audio no disponible.');
+  // Use the complete PCM recording, wrapped losslessly as WAV, like the accepted B sample.
+  const reader=response.body.getReader(),parts=[];let size=0;
+  while(true){const {value,done}=await reader.read();if(done)break;if(ticket!==epoch||player!==current)return;size+=value.length;if(size>PCM_RATE*2*300)throw new Error('Audio demasiado largo.');parts.push(value);}
+  if(!size||size%2)throw new Error('El audio llegó incompleto.');
   if(micPending){setMode('waiting');showNotice('Confirma el permiso del micrófono en el navegador. Si lo rechazas, podrás responder por escrito.');await micPending.catch(()=>{});}
   if(ticket!==epoch||player!==current)return;
-  audioContext??=new AudioContext();await audioContext.resume();
-  if(ticket!==epoch||player!==current)return;
-  if(audioContext.state!=='running')throw new Error('Activa el sonido para escuchar.');
-  setMode('speaking');showNotice(null);
-  const response=await fetch(url,{signal:current.controller.signal});if(!response.ok)throw new Error('Audio no disponible.');
-  const reader=response.body.getReader();let carry=new Uint8Array(0),cursor=audioContext.currentTime,received=0,primed=false;
-  while(true){
-   const {value,done}=await reader.read();
-   const bytes=new Uint8Array(carry.length+(value?.length||0));bytes.set(carry);if(value){bytes.set(value,carry.length);received+=value.length;}
-   if(done&&(bytes.length%2||!received))throw new Error('El audio llegó incompleto.');
-   // Coalesce tiny network fragments; flush even a one-sample utterance at EOF.
-   const length=done?bytes.length:bytes.length-bytes.length%PCM_FRAME_BYTES;carry=bytes.slice(length);
-   for(let offset=0;offset<length;offset+=PCM_FRAME_BYTES){
-    while(cursor-audioContext.currentTime>1){if(ticket!==epoch||player!==current)return;await new Promise(resolve=>setTimeout(resolve,20));}
-    if(ticket!==epoch||player!==current)return;
-    const count=Math.min(PCM_FRAME_BYTES,length-offset)/2,padding=primed?0:PCM_STARTUP_SAMPLES;
-    const buffer=audioContext.createBuffer(1,count+padding,PCM_RATE),samples=buffer.getChannelData(0),view=new DataView(bytes.buffer,offset,count*2);
-    // Prefix silence in the same buffer, preserving the first speech sample and its timing.
-    for(let index=0;index<count;index++)samples[padding+index]=view.getInt16(index*2,true)/32768;
-    const node=audioContext.createBufferSource();node.buffer=buffer;node.connect(audioContext.destination);current.nodes.add(node);
-    node.onended=()=>{current.nodes.delete(node);node.disconnect();};cursor=Math.max(cursor,audioContext.currentTime+.03);node.start(cursor);cursor+=buffer.duration;primed=true;
-   }
-   if(done)break;
-  }
-  while(current.nodes.size){if(ticket!==epoch||player!==current)return;await new Promise(resolve=>setTimeout(resolve,20));}
-  if(ticket===epoch&&player===current&&id===state?.audio_id){player=null;await act('playback',{audio_id:id},{ticket});}
- }catch(error){if(ticket!==epoch||player!==current)return;stopPlayback();stopCapture();setMode('waiting');showNotice(error.message==='Activa el sonido para escuchar.'?error.message:'No pudimos completar el audio. El turno está guardado.','Reintentar audio',()=>act('retry'));}
+  const header=new ArrayBuffer(44),view=new DataView(header);
+  const tag=(offset,text)=>{for(let index=0;index<text.length;index++)view.setUint8(offset+index,text.charCodeAt(index));};
+  tag(0,'RIFF');view.setUint32(4,size+36,true);tag(8,'WAVE');tag(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,PCM_RATE,true);view.setUint32(28,PCM_RATE*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);tag(36,'data');view.setUint32(40,size,true);
+  current.objectUrl=URL.createObjectURL(new Blob([header,...parts],{type:'audio/wav'}));
+  const audio=new Audio(current.objectUrl);current.audio=audio;
+  audio.onended=()=>{if(ticket===epoch&&player===current&&id===state?.audio_id){stopPlayback();setMode('thinking');act('playback',{audio_id:id},{ticket});}};
+  audio.onerror=()=>{if(ticket!==epoch||player!==current)return;stopPlayback();stopCapture();setMode('waiting');showNotice('No pudimos reproducir el audio. El turno está guardado.','Reintentar audio',()=>act('retry'));};
+  try{await audio.play();if(ticket===epoch&&player===current){showNotice(null);setMode('speaking');}}
+  catch{if(ticket!==epoch||player!==current)return;stopPlayback();setMode('waiting');showNotice('Tu navegador necesita un toque para activar el sonido.','Escuchar mensaje',()=>playResponse(ticket));}
+ }catch(error){if(ticket!==epoch||player!==current)return;stopPlayback();stopCapture();setMode('waiting');showNotice('No pudimos completar el audio. El turno está guardado.','Reintentar audio',()=>act('retry'));}
 }
 
 async function prepareMic(){

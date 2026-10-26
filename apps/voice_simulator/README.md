@@ -50,7 +50,9 @@ The API key needs Text to Speech and Speech to Text access, and the voice must b
 available to your account through the API. Defaults are `scribe_v2` and
 `eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
-The browser uses Web Audio and fetch streaming; it does not download/decode a complete MP3.
+The browser receives the complete PCM recording, wraps it losslessly in a mono WAV header,
+and plays it through the native audio element, matching the accepted B sample. It adds no
+tones, silence, or per-frame scheduling. Playback waits for the complete download.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
 Both speech paths render `COP` as `pesos` (`1 COP` as `1 peso`) only in the provider request:
 `600,000 COP` stays written in the conversation while speech receives `600000 pesos`.
@@ -70,7 +72,8 @@ the existing business checks before synthesis; speculative tokens are never spok
 
 1. Click **Iniciar llamada**. The greeting plays automatically.
 2. Allow microphone access. Speak when ready, including while the agent speaks: sustained
-   microphone activity stops playback, cancels queued audio and closes the provider stream.
+   microphone activity pauses native playback immediately. Hanging up also cancels a pending
+   audio download.
    About 900 ms of silence sends the recording; **Responder** / **Enviar** remain available.
    Use headphones to reduce echo. With permission denied, use the text fallback.
 3. Say `Mi cédula es 123456789`, then `verificar 1111`.
@@ -213,7 +216,9 @@ by their parent node; this does not expand their internal execution or implement
 This is a local demo API, not a production authentication boundary or telephone service.
 Browser playback events do not prove audibility or attention. Stronger playback tracking,
 production authentication, and telephony remain planned. Scribe transcription still uploads
-a completed bounded recording; this change streams TTS, not STT or speculative LLM tokens.
+a completed bounded recording. TTS streams to the server/browser cache, but native WAV
+playback begins only after the complete response; this does not stream audible playback,
+STT, or speculative LLM tokens.
 Streaming cancels audio generation/delivery, not an already persisted graph turn. Plan-specific
 endpoint/credit availability and physical microphone/echo performance require live acceptance.
 Only audio and text needed for speech are sent to ElevenLabs. Use fictional data.
@@ -228,25 +233,19 @@ also cover automatic layout, parallel branches, cycles, renamed terminal nodes, 
 source reload deferred during active calls, invalid-edit recovery, session isolation, failed-start
 recovery, non-blocking reads, error redaction, transaction rollback, and graph-turn quarantine.
 Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
-The browser state-machine regression uses Node when available and exercises PCM scheduling
-before EOF, odd-byte chunk boundaries, speech interruption, queued-source cancellation,
-recording pre-roll, and acknowledgment only after complete playback. API tests cover partial
-streams, explicit retries, cancellation cleanup, and interrupted-offer acceptance protection.
-PCM playback groups network fragments into 100 ms frames and prefixes the first frame with
-150 ms of silence to give the output device time to start without consuming the first word.
-Speaker comparison of cached source audio found a clipped opening with Flash for the configured
-voice, including a generation with a leading SSML pause; the user confirmed a complete opening
-with Multilingual v2. Streaming now uses the same Multilingual v2 model as MP3 synthesis.
-The browser prefix only allows output startup; it cannot repair a missing generated phoneme.
-Initial playback waits for the pending microphone permission/setup to settle (grant or denial)
-so opening capture cannot overlap the first spoken word. Capture analysis and playback share
-one AudioContext; releasing the microphone disconnects its nodes without closing playback.
-The wait is cancellable by hanging up, and denying the microphone retains typed replies.
-Every original speech sample is retained, including utterances shorter than one frame and
-the final partial frame. The silent prefix is interruptible with the rest of the queue.
-This adds a small startup delay; physical speaker/headset acceptance remains necessary,
-especially for Bluetooth routes whose activation delay can vary.
-Partial provider failures abort the HTTP body, so the browser clears queued audio without
+The browser state-machine regression uses Node when available and exercises complete-download
+WAV playback, odd-byte network boundaries, exact PCM sample preservation without a prefix,
+speech interruption, download cancellation, recording pre-roll, and acknowledgment only after
+the native audio element fires `ended`. It also covers microphone setup/denial, autoplay
+recovery, and object URL cleanup. API tests cover partial streams, explicit retries, cancellation
+cleanup, and interrupted-offer acceptance protection.
+The user requested the same full-file native playback as the Multilingual v2 B sample after
+fragmented playback, added silence, and a diagnostic tone did not resolve audible clipping.
+The source model and playback mechanism now match that sample; physical acceptance of the
+updated simulator remains necessary. No diagnostic tone is included in the application.
+Initial playback waits for pending microphone setup (grant or denial) to settle. The wait is
+cancellable by hanging up, and denying the microphone retains typed replies.
+Partial provider failures abort the HTTP body, so the browser rejects incomplete audio without
 acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
 still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
 

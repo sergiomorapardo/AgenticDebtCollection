@@ -408,7 +408,7 @@ def test_comma_separated_demo_id_is_found(session, monkeypatch):
     assert session.send("verificar 1111")["stage"] == "ready"
 
 
-def test_browser_stream_queue_barge_in_and_recording_preroll(tmp_path):
+def test_browser_native_wav_barge_in_and_recording_preroll(tmp_path):
     """Exercise the shipped browser code with controlled audio/network timing in Node."""
     import shutil
     import subprocess
@@ -419,117 +419,55 @@ def test_browser_stream_queue_barge_in_and_recording_preroll(tmp_path):
         pytest.skip("Node is required for browser state-machine regression tests")
     runner = tmp_path / "voice.cjs"
     runner.write_text(r"""
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const html = fs.readFileSync(process.argv[2], 'utf8');
-const full = html.split('<script>')[1].split('</script>')[0];
-new vm.Script(full); // Also check syntax of the technical viewer.
-const script = full.split('// The viewer')[0].replace('restoreSession();', '');
-function fixture(readFailure=false,interruptFailure=false,short=false,odd=false) {
- const calls=[], nodes=[], contexts=[], timers=new Map(), elements=new Map(); let eof=false, clock=1, rms=0;
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const html=fs.readFileSync(process.argv[2],'utf8'),full=html.split('<script>')[1].split('</script>')[0];
+new vm.Script(full);
+const script=full.split('// The viewer')[0].replace('restoreSession();','');
+function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,255,255],blocked=false}={}){
+ const calls=[],audios=[],blobs=new Map(),revoked=[],timers=new Map(),elements=new Map();let eof=false,clock=1,rms=0,aborted=false,reads=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
  const document={documentElement:{dataset:{}},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
- class Context {
-  constructor(){this.state='running';this.started=Date.now();contexts.push(this);}
-  get currentTime(){return (Date.now()-this.started)/1000;}
-  resume(){return Promise.resolve();}close(){return Promise.resolve();}
-  createBuffer(channels,size,rate){const samples=new Float32Array(size);return {duration:size/rate,getChannelData:()=>samples};}
-  createBufferSource(){const context=this,n={connect(){},disconnect(){},start(when){n.when=when;nodes.push(n);n.timer=setTimeout(()=>{n.ended=true;n.onended?.();},(when-context.currentTime+n.buffer.duration)*1000);},stop(){n.stopped=true;clearTimeout(n.timer);}};return n;}
-  createMediaStreamSource(){return {connect(){},disconnect(){}};}createAnalyser(){return {fftSize:2048,disconnect(){},getFloatTimeDomainData(data){data.fill(rms);}};}
- }
- class Recorder {
-  static isTypeSupported(){return true;}constructor(){this.state='inactive';}
-  start(){this.state='recording';}stop(){this.state='inactive';setImmediate(()=>this.onstop?.());}
- }
- let releaseEnd, aborted=false;
- const end=new Promise(resolve=>{releaseEnd=()=>{eof=true;resolve({done:true});};});
- const sandbox={console,document,AudioContext:Context,MediaRecorder:Recorder,Blob,AbortController,Uint8Array,Float32Array,DataView,Date,crypto:require('node:crypto').webcrypto,
-  performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},
-  setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
-  fetch:async(url,options={})=>{
-   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array(odd?[0,2]:[0,2,0]),done:false};if(index===3&&!short)return {value:new Uint8Array(9600).fill(3),done:false};if(readFailure)throw new Error('truncated stream');return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
-   calls.push({url,body:options.body,headers:options.headers});
-   if(url==='/api/interrupt'&&interruptFailure){interruptFailure=false;return {ok:false,json:async()=>({detail:'temporary interrupt error'})};}
-   if(url==='/api/playback'){assert.ok(eof,'playback acknowledged before stream EOF');assert.ok(nodes.every(node=>node.ended),'playback acknowledged before scheduled speech ended');}
-   return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
-  }
- };
- const context=vm.createContext(sandbox);vm.runInContext(script,context);
- const run=code=>vm.runInContext(code,context);
+ class Context{constructor(){this.state='running';}resume(){return Promise.resolve();}createBufferSource(){throw new Error('Must use native playback');}createMediaStreamSource(){return {connect(){},disconnect(){}};}createAnalyser(){return {fftSize:2048,disconnect(){},getFloatTimeDomainData(data){data.fill(rms);}};}}
+ class Recorder{static isTypeSupported(){return true;}constructor(){this.state='inactive';}start(){this.state='recording';}stop(){this.state='inactive';setImmediate(()=>this.onstop?.());}}
+ class Audio{constructor(url){this.url=url;audios.push(this);}async play(){if(blocked)throw new Error('autoplay blocked');this.playing=true;}pause(){this.paused=true;}removeAttribute(){}load(){}end(){this.ended=true;this.onended?.();}}
+ let releaseEnd;const end=new Promise(resolve=>{releaseEnd=()=>{eof=true;resolve({done:true});};});
+ const sandbox={console,document,Audio,AudioContext:Context,MediaRecorder:Recorder,Blob,AbortController,Uint8Array,Float32Array,ArrayBuffer,DataView,Date,crypto:require('node:crypto').webcrypto,URL:{createObjectURL(blob){const url='blob:'+blobs.size;blobs.set(url,blob);return url;},revokeObjectURL(url){revoked.push(url);}},
+ performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
+ fetch:async(url,options={})=>{
+  if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{reads++;if(index++===0)return {value:new Uint8Array(bytes.slice(0,1)),done:false};if(index===2)return {value:new Uint8Array(bytes.slice(1)),done:false};if(failure)throw new Error('truncated');return Promise.race([end,new Promise((_,reject)=>{const abort=()=>{aborted=true;reject(new Error('aborted'));};if(options.signal.aborted)abort();else options.signal.addEventListener('abort',abort,{once:true});})]);}})}};}
+  calls.push({url,body:options.body,headers:options.headers});
+  if(url==='/api/interrupt'&&interruptFailure){interruptFailure=false;return {ok:false,json:async()=>({detail:'temporary interrupt error'})};}
+  if(url==='/api/playback'){assert.ok(eof);assert.ok(audios.at(-1).ended,'must wait for native ended event');}
+  return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
+ }};
+ const context=vm.createContext(sandbox);vm.runInContext(script,context);const run=code=>vm.runInContext(code,context);
  run("state={session_id:'call',audio_id:'current.pcm',audio_url:'/api/audio/current.pcm',audio_format:'pcm_s16le_24000',finished:false,history:[]};epoch=1;");
- return {run,calls,nodes,contexts,releaseEnd,get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();}};
+ return {run,calls,audios,blobs,revoked,releaseEnd,get reads(){return reads;},get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();},close(){run('releaseMic();stopPlayback();');}};
 }
 const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5));}throw new Error('Timed out');};
 (async()=>{
- const first=fixture();const playing=first.run('playResponse(epoch)');
- await until(()=>first.nodes.length===2);
- assert.equal(first.calls.length,0); // The first fragment is scheduled before network EOF.
- const initial=first.nodes[0].buffer.getChannelData(0);
- assert.equal(initial.length,6000);assert.ok(initial.slice(0,3600).every(sample=>sample===0));
- assert.equal(initial[3600],1/32768);assert.equal(initial[3601],2/32768);
- assert.ok(initial.slice(3602).every(sample=>sample===771/32768));
- assert.equal(first.nodes[1].buffer.getChannelData(0).length,2400); // Silence only at the start.
- assert.equal(first.nodes[1].when,first.nodes[0].when+first.nodes[0].buffer.duration);
- await first.run('prepareMic()');
- assert.equal(first.contexts.length,1,'capture and playback must share the same context');
- first.run("capture.recorder.ondataavailable({data:new Blob(['initial syllable'])});");
- first.tick(.1);first.tick(.1);first.tick(.1); // Sustained voice, not a button click.
- assert.equal(first.run('mode'),'recording');
- assert.ok(first.nodes.every(node=>node.stopped));
- await playing;assert.ok(first.aborted);
- first.run('finishRecording()');
- await until(()=>first.calls.some(call=>call.url==='/api/recording'));
- assert.equal(await first.calls.find(call=>call.url==='/api/recording').body.text(),'initial syllable');
- assert.equal(first.calls.filter(call=>call.url==='/api/interrupt').length,1);
- assert.equal(first.calls.filter(call=>call.url==='/api/playback').length,0);
- first.run('releaseMic();stopPlayback();');
- const second=fixture();const complete=second.run('playResponse(epoch)');
- await until(()=>second.nodes.length>0);second.releaseEnd();await complete;
- const speech=second.nodes.flatMap((node,index)=>Array.from(node.buffer.getChannelData(0)).slice(index===0?3600:0));
- assert.equal(speech.length,4802);assert.deepEqual(speech.slice(0,2),[1/32768,2/32768]);
- assert.ok(speech.slice(2).every(sample=>sample===771/32768)); // No discarded/repeated samples across frames or EOF.
- assert.equal(second.calls.filter(call=>call.url==='/api/playback').length,1);
- assert.equal(second.run('mode'),'ready');second.run('releaseMic();stopPlayback();');
- const broken=fixture(true);await broken.run('playResponse(epoch)');
- assert.equal(broken.calls.filter(call=>call.url==='/api/playback').length,0);
- assert.ok(broken.nodes.every(node=>node.stopped));assert.equal(broken.run('mode'),'waiting');
- broken.run('releaseMic();stopPlayback();');
- const tiny=fixture(false,false,true);const tinyPlaying=tiny.run('playResponse(epoch)');
- await new Promise(resolve=>setTimeout(resolve,20));assert.equal(tiny.nodes.length,0);
- tiny.releaseEnd();await tinyPlaying;
- assert.equal(tiny.nodes.length,1);assert.equal(tiny.nodes[0].buffer.getChannelData(0).length,3602);
- assert.deepEqual(Array.from(tiny.nodes[0].buffer.getChannelData(0)).slice(3600),[1/32768,2/32768]);
- tiny.run('releaseMic();stopPlayback();');
- const malformed=fixture(false,false,true,true);const malformedPlaying=malformed.run('playResponse(epoch)');
- malformed.releaseEnd();await malformedPlaying;
- assert.equal(malformed.nodes.length,0);assert.equal(malformed.calls.length,0);assert.equal(malformed.run('mode'),'waiting');
- malformed.run('releaseMic();stopPlayback();');
- const retry=fixture(false,true);const retryPlaying=retry.run('playResponse(epoch)');
- await until(()=>retry.nodes.length>0);await retry.run('prepareMic()');
- retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();");
- await retryPlaying;retry.run('finishRecording()');
- await until(()=>retry.run('mode')==='waiting');retry.run('recovery()');
- await until(()=>retry.calls.some(call=>call.url==='/api/recording'));
- const interrupts=retry.calls.filter(call=>call.url==='/api/interrupt');assert.equal(interrupts.length,2);
- assert.equal(interrupts[0].headers['X-Request-ID'],interrupts[1].headers['X-Request-ID']);
- retry.run('releaseMic();stopPlayback();');
- const rapid=fixture();rapid.run("state.audio_url=null;setMode('ready');");await rapid.run('prepareMic()');
- rapid.run("const previousRecorder=recorder;stopCapture();setMode('thinking');setMode('ready');if(previousRecorder===recorder||previousRecorder.state!=='inactive'||recorder.state!=='recording')throw new Error('capture lifecycle');");
- rapid.run('releaseMic();stopPlayback();');
- const pending=fixture();pending.run('let finishMic;micPending=new Promise(resolve=>{finishMic=resolve;});');
- const pendingPlayback=pending.run('playResponse(epoch)');
- await new Promise(resolve=>setTimeout(resolve,20));assert.equal(pending.nodes.length,0);assert.equal(pending.run('mode'),'waiting');
- pending.run('finishMic();');await until(()=>pending.nodes.length>0);pending.releaseEnd();await pendingPlayback;
- assert.equal(pending.calls.filter(call=>call.url==='/api/playback').length,1);
- pending.run('releaseMic();stopPlayback();');
- const stale=fixture();stale.run('let finishMic;micPending=new Promise(resolve=>{finishMic=resolve;});');
- const stalePlayback=stale.run('playResponse(epoch)');stale.run('epoch++;stopPlayback();releaseMic();finishMic();');await stalePlayback;
- assert.equal(stale.nodes.length,0);assert.equal(stale.calls.length,0);
- const denied=fixture();denied.run("micPending=Promise.reject(new Error('permission denied'));");
- const deniedPlayback=denied.run('playResponse(epoch)');denied.releaseEnd();await deniedPlayback;
- assert.equal(denied.run('mode'),'ready');denied.run('releaseMic();stopPlayback();');
- console.log('PCM early playback, odd-byte boundaries, VAD interruption, queue cancellation, pre-roll, EOF acknowledgement: passed');
+ const first=fixture(),loading=first.run('playResponse(epoch)');await until(()=>first.reads>=3);
+ assert.equal(first.audios.length,0,'no partial audio playback');assert.equal(first.calls.length,0);
+ first.releaseEnd();await loading;assert.equal(first.run('mode'),'speaking');
+ const wav=await first.blobs.values().next().value.arrayBuffer(),view=new DataView(wav);
+ assert.equal(Buffer.from(wav).subarray(0,4).toString(),'RIFF');assert.equal(Buffer.from(wav).subarray(8,12).toString(),'WAVE');
+ assert.equal(view.getUint32(4,true),44);assert.equal(view.getUint16(20,true),1);assert.equal(view.getUint16(22,true),1);assert.equal(view.getUint32(24,true),24000);assert.equal(view.getUint32(28,true),48000);assert.equal(view.getUint16(32,true),2);assert.equal(view.getUint16(34,true),16);assert.equal(view.getUint32(40,true),8);
+ assert.deepEqual(Array.from(new Uint8Array(wav,44)),[1,0,255,127,0,128,255,255],'all samples retained with no tones or silence');
+ assert.equal(first.calls.length,0);await first.run('prepareMic()');first.run("capture.recorder.ondataavailable({data:new Blob(['initial syllable'])});");
+ const oldEnded=first.audios[0].onended;first.tick(.1);first.tick(.1);first.tick(.1);
+ assert.equal(first.run('mode'),'recording');assert.ok(first.audios[0].paused);assert.equal(first.revoked.length,1);oldEnded();
+ assert.equal(first.calls.filter(c=>c.url==='/api/playback').length,0);first.run('finishRecording()');await until(()=>first.calls.some(c=>c.url==='/api/recording'));
+ assert.equal(await first.calls.find(c=>c.url==='/api/recording').body.text(),'initial syllable');first.close();
+ const complete=fixture(),ready=complete.run('playResponse(epoch)');complete.releaseEnd();await ready;complete.audios[0].end();await until(()=>complete.run('mode')==='ready');assert.equal(complete.calls.filter(c=>c.url==='/api/playback').length,1);assert.equal(complete.revoked.length,1);complete.close();
+ for(const options of [{failure:true},{bytes:[]},{bytes:[1]}]){const broken=fixture(options),p=broken.run('playResponse(epoch)');broken.releaseEnd();await p;assert.equal(broken.audios.length,0);assert.equal(broken.calls.length,0);assert.equal(broken.run('mode'),'waiting');broken.close();}
+ const cancelled=fixture(),download=cancelled.run('playResponse(epoch)');await until(()=>cancelled.reads>=3);cancelled.run('epoch++;stopPlayback();');await download;assert.ok(cancelled.aborted);assert.equal(cancelled.audios.length,0);assert.equal(cancelled.calls.length,0);cancelled.close();
+ const pending=fixture();pending.run('let finishMic;micPending=new Promise(resolve=>{finishMic=resolve;});');const pendingPlayback=pending.run('playResponse(epoch)');pending.releaseEnd();await until(()=>pending.run('mode')==='waiting');assert.equal(pending.audios.length,0);pending.run('finishMic();');await pendingPlayback;assert.equal(pending.audios.length,1);pending.close();
+ const stale=fixture();stale.run('let finishMic;micPending=new Promise(resolve=>{finishMic=resolve;});');const stalePlayback=stale.run('playResponse(epoch)');stale.releaseEnd();await until(()=>stale.run('mode')==='waiting');stale.run('epoch++;stopPlayback();releaseMic();finishMic();');await stalePlayback;assert.equal(stale.audios.length,0);assert.equal(stale.blobs.size,0);
+ const denied=fixture();denied.run("micPending=Promise.reject(new Error('permission denied'));micPending.catch(()=>{});");const deniedPlayback=denied.run('playResponse(epoch)');denied.releaseEnd();await deniedPlayback;assert.equal(denied.run('mode'),'speaking');denied.close();
+ const blocked=fixture({blocked:true}),blockedPlayback=blocked.run('playResponse(epoch)');blocked.releaseEnd();await blockedPlayback;assert.equal(blocked.run('mode'),'waiting');assert.equal(blocked.calls.length,0);assert.equal(blocked.revoked.length,1);blocked.close();
+ const failed=fixture(),failedPlayback=failed.run('playResponse(epoch)');failed.releaseEnd();await failedPlayback;failed.audios[0].onerror();assert.equal(failed.run('mode'),'waiting');assert.equal(failed.calls.length,0);assert.equal(failed.revoked.length,1);failed.close();
+ const retry=fixture({interruptFailure:true}),retryPlayback=retry.run('playResponse(epoch)');retry.releaseEnd();await retryPlayback;await retry.run('prepareMic()');retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();finishRecording();");await until(()=>retry.run('mode')==='waiting');retry.run('recovery()');await until(()=>retry.calls.some(c=>c.url==='/api/recording'));const interrupts=retry.calls.filter(c=>c.url==='/api/interrupt');assert.equal(interrupts.length,2);assert.equal(interrupts[0].headers['X-Request-ID'],interrupts[1].headers['X-Request-ID']);retry.close();
+ console.log('Native WAV: exact samples, complete download, interruption, cancellation, mic races, autoplay recovery, ended-only acknowledgment passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
     result = subprocess.run(
