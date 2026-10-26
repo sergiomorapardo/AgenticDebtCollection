@@ -10,7 +10,7 @@ smallest change that satisfies the request. Preserve the existing application's
 architecture and business guarantees.
 
 1. Read [project.md](references/project.md) for paths, configuration, dependencies,
-   and the origin of this adaptation.
+   and local scope.
 2. Use the decision table below to resolve missing design decisions.
    Reuse decisions and authorization already supplied. Ask one material question
    at a time through the host's available question tool, or plain text when
@@ -18,7 +18,7 @@ architecture and business guarantees.
 3. Present the intended flow, affected files, and observable success criteria.
    Continue when the request already authorizes implementation.
 4. Read [build.md](references/build.md) for prompts, tools, memory, and controls.
-5. Run the applicable offline checks in [validation.md](references/validation.md).
+5. Run the applicable offline checks in [build.md](references/build.md#validate-and-deliver).
 6. Before a live run, establish its model, call budget, tracing destination, and
    existing authorization. Request approval for paid calls or uploads outside
    that authorization. Never silently upgrade the model or retry indefinitely.
@@ -49,5 +49,5 @@ Use a chain when steps are fixed and a tool loop when the model must select
 facts to fetch. Keep the existing graph when business state and gates interact.
 Before implementing, show the intended flow, modules, data/state ownership,
 success criteria, and estimated calls and traces. Do not replace the collections
-graph with a generic loop to match a course example. New retrieval features are
+graph with a generic loop to match an unrelated example. New retrieval features are
 optional and require their own implementation and validation.

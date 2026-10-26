@@ -9,7 +9,7 @@ Answer one decision with evidence: which configuration should be kept, and what
 is still missing to decide? One successful conversation is not an evaluation.
 
 1. Read [project.md](references/project.md) for contracts, data, commands, model
-   settings, and upstream provenance.
+   settings, and local scope.
 2. Read [design.md](references/design.md). Fix the decision, configurations,
    cases, human-reviewed references, metrics, and resource budget. Reuse choices
    already made; ask only for consequential missing information.

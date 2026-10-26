@@ -61,6 +61,7 @@
 
 ## Documentation
 
+- Never publish private client or training-project names, repository links, internal commit identifiers, or client-specific material in public repositories, commit messages, PR descriptions, or review comments. Use project-local documentation and inspect the full diff and public metadata before publishing.
 - Write READMEs, guides, contribution templates, and diagram labels in English.
 - Prefer concise Mermaid flows, sequence diagrams, and comparison tables over long prose.
 - Keep diagrams aligned with code and label planned capabilities explicitly.

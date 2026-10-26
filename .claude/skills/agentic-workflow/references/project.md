@@ -6,12 +6,11 @@ editing: use an isolated worktree and a `feature/` branch, and keep each PR with
 
 ## Local scope
 
-This instruction-only edition preserves design decisions, progressive reference
+This instruction-only skill covers design decisions, progressive reference
 loading, deterministic controls, conversation isolation, and offline-first
-validation. It condenses the original wizard, concepts, and troubleshooting and
-uses this repository's code as examples. The course's Python templates, notebook
-corpora, hooks, Claude settings, and shared trace quota
-are not installed here. Upstream live-run evidence does not validate this copy.
+validation using this repository's code as examples. It does not install Python
+templates, datasets, hooks, or model integrations. Live behavior requires
+validation in this project.
 
 The canonical files live in `.claude/skills/agentic-workflow/`.
 `.agents/skills/agentic-workflow` links there for Codex; edit the canonical files.
@@ -31,24 +30,23 @@ Codex's repository discovery and symlink support are documented in
 | Offline data | `src/agents/collections/data/fixtures/`, `src/agents/collections/data/policies/demo_policy.json` |
 | Checks | `tests/README.md`, `docs/VALIDATION.md`, `eval/scenarios.json` |
 
-Extend these modules instead of generating a second app under the course's
-`labs/` layout. Keep optional future runtime capabilities under
+Extend these modules instead of generating a second app. Keep optional future runtime capabilities under
 `src/agents/skills/` separate from these development skills.
 
 ## Configuration and dependencies
 
 - Reuse `collections_lab.config.settings.load_settings` and
   `agents.collections.runtime.AppContext`. The CLI loads only the checkout's
-  `.env`; never import credentials from the course or another worktree.
+  `.env`; never import credentials from another project or worktree.
 - Default to `COLLECTIONS_LLM_PROVIDER=mock`. For authorized Anthropic runs, keep
   the Haiku model configured by `ANTHROPIC_MODEL`; inspect settings for its value
-  instead of importing the course's model, parameters, or prices. Never switch
+  instead of importing unrelated model settings or prices. Never switch
   to Sonnet or Opus automatically.
 - This is a simulation with synthetic Colombian customer fixtures. Preserve
   runnable Spanish utterances; write code identifiers and documentation in English.
 - Install through uv; version `pyproject.toml` and `uv.lock` together. The project
   has LangGraph, LangChain's Anthropic adapter, Jinja, and Pydantic. Do not assume
-  the course's RAG, embeddings, or evaluation packages are installed.
+  optional RAG, embeddings, or evaluation packages are installed.
 - Put temporary transcripts, reports, and databases under ignored `.validation/`
   or `.local/`. Do not commit credentials or generated customer transcripts.
   Keep tracing disabled for offline validation.

@@ -26,7 +26,7 @@ separately from evaluator failures; do not hide them by removing their rows.
 
 For monetary costs, cite the applicable current price and distinguish measured
 from estimated cost. Include untraced judge calls. Without verified pricing,
-report tokens and mark monetary cost unknown; do not reuse course prices.
+report tokens and mark monetary cost unknown; do not reuse unverified prices.
 
 ## Interpretation
 
