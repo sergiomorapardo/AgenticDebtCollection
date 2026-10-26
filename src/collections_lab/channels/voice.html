@@ -92,9 +92,9 @@ setVisualTheme(savedTheme);
 $('theme-toggle').onclick=()=>setVisualTheme(document.documentElement.dataset.theme==='glass'?'classic':'glass');
 let state=null, mode='idle', epoch=0, recorder=null, stream=null, player=null, recovery=null;
 let startedAt=null, stoppedAt=null, recordTimer=null, discardRecording=false;
-let audioContext=null, micContext=null, analyser=null, micTimer=null, capture=null, micPending=null;
+let audioContext=null, micSource=null, analyser=null, micTimer=null, capture=null, micPending=null;
 const VOICE_THRESHOLD=.035, VOICE_HOLD_MS=120, SILENCE_MS=900, MAX_RECORDING_MS=60000;
-const PCM_RATE=24000, PCM_FRAME_BYTES=4800, PCM_STARTUP_SAMPLES=3600; // 100 ms frames; 150 ms silent output warm-up.
+const PCM_RATE=24000, PCM_FRAME_BYTES=4800, PCM_STARTUP_SAMPLES=12000; // 100 ms frames; 500 ms output warm-up after microphone setup.
 const labels={idle:'Listo para conversar',connecting:'Conectando…',ready:'Es tu turno',recording:'Te escucho…',thinking:'Preparando respuesta…',speaking:'El agente está hablando',waiting:'Respuesta lista',ended:'Llamada terminada',closing:'Terminando llamada…'};
 function setMode(next){mode=next;$('card').dataset.mode=next;$('status').textContent=labels[next];const ready=next==='ready'||next==='speaking';$('mic').disabled=!(ready||next==='recording');$('text').disabled=!ready;$('send').disabled=!ready;$('start').disabled=next==='connecting';$('start').hidden=!['idle','connecting','ended'].includes(next);$('controls').hidden=['idle','connecting','ended'].includes(next);$('hangup').disabled=next==='closing';$('mic-symbol').setAttribute('href',next==='recording'?'#stop-icon':'#mic-icon');$('mic').setAttribute('aria-label',next==='recording'?'Detener y enviar respuesta':'Grabar respuesta');$('mic-label').textContent=next==='recording'?'Enviar':'Responder';$('hint').textContent=next==='recording'?'Habla; enviaremos al terminar. También puedes pulsar Enviar.':next==='ready'?'Habla o pulsa el micrófono para responder.':next==='speaking'?'Puedes interrumpir hablando o pulsando Responder. Usa auriculares para evitar eco.':next==='ended'?'Gracias por conversar. Puedes iniciar una llamada nueva.':next==='thinking'?'Estamos procesando tu mensaje.':'El micrófono permanece activo durante la llamada si das permiso.';if(next==='ended')releaseMic();if(ready)armCapture();}
 function showNotice(message, label=null, fn=null){$('notice').hidden=!message;$('notice-text').textContent=message||'';$('recover').hidden=!label;$('recover').textContent=label||'';recovery=fn;}
@@ -102,7 +102,7 @@ $('recover').onclick=()=>recovery?.();
 function showHistory(){const box=$('messages');box.replaceChildren();for(const item of state?.history||[]){const row=document.createElement('div');row.className='message '+item.role;const who=document.createElement('small');who.textContent=item.role==='user'?'Tú':'Asistente';row.append(who,document.createTextNode(item.content));box.append(row);}box.scrollTop=box.scrollHeight;const last=state?.history?.filter(m=>m.role==='assistant').at(-1);if(last)$('quote').textContent=last.content;$('provider').textContent=state?.provider==='anthropic'?'Conversación con Claude Haiku.':'Conversación de prueba con respuestas simuladas.';}
 function stopPlayback(){if(player?.controller){player.controller.abort();for(const node of player.nodes){node.onended=null;try{node.stop();}catch{}node.disconnect();}player.nodes.clear();}else if(player){player.onended=null;player.onerror=null;player.pause();player.removeAttribute('src');player.load();}player=null;}
 function stopCapture(){if(capture){capture.discard=true;if(capture.recorder.state==='recording')capture.recorder.stop();capture=null;}clearTimeout(recordTimer);}
-function releaseMic(){stopCapture();clearInterval(micTimer);stream?.getTracks().forEach(track=>track.stop());stream=null;analyser=null;micContext?.close().catch(()=>{});micContext=null;}
+function releaseMic(){stopCapture();clearInterval(micTimer);stream?.getTracks().forEach(track=>track.stop());stream=null;micSource?.disconnect();micSource=null;analyser?.disconnect();analyser=null;}
 async function request(action, body={}, key=crypto.randomUUID(), callId=state?.session_id||''){
  const raw=body instanceof Blob;const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),130000);
  try{const response=await fetch('/api/'+action,{method:'POST',credentials:'same-origin',headers:{'X-Voice-Client':'1','X-Request-ID':key,'X-Call-ID':callId,'Content-Type':raw?body.type:'application/json'},body:raw?body:JSON.stringify(body),signal:controller.signal});const data=await response.json();if(!response.ok){const error=new Error(data.detail||'No pudimos completar la solicitud.');error.state=data.state;error.definite=true;throw error;}return data;}finally{clearTimeout(timeout);}
@@ -126,6 +126,9 @@ async function playPCM(ticket){
  const id=state.audio_id,url=state.audio_url;
  const current={controller:new AbortController(),nodes:new Set()};player=current;
  try{
+  // Opening capture can reconfigure the output route; do not speak during that transition.
+  if(micPending){setMode('waiting');showNotice('Confirma el permiso del micrófono en el navegador. Si lo rechazas, podrás responder por escrito.');await micPending.catch(()=>{});}
+  if(ticket!==epoch||player!==current)return;
   audioContext??=new AudioContext();await audioContext.resume();
   if(ticket!==epoch||player!==current)return;
   if(audioContext.state!=='running')throw new Error('Activa el sonido para escuchar.');
@@ -162,7 +165,11 @@ async function prepareMic(){
   if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)throw new Error('Usa la respuesta escrita; este navegador no permite grabar.');
   const input=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
   if(ticket!==epoch||['ended','closing'].includes(mode)){input.getTracks().forEach(track=>track.stop());return;}
-  stream=input;micContext=new AudioContext();await micContext.resume();analyser=micContext.createAnalyser();analyser.fftSize=2048;micContext.createMediaStreamSource(stream).connect(analyser);
+  // Capture analysis and playback share one context instead of opening competing audio contexts.
+  audioContext??=new AudioContext();
+  try{await audioContext.resume();}catch(error){input.getTracks().forEach(track=>track.stop());throw error;}
+  if(ticket!==epoch||['ended','closing'].includes(mode)){input.getTracks().forEach(track=>track.stop());return;}
+  stream=input;analyser=audioContext.createAnalyser();analyser.fftSize=2048;micSource=audioContext.createMediaStreamSource(stream);micSource.connect(analyser);
   const samples=new Float32Array(analyser.fftSize);let voicedAt=0,lastVoice=0;
   micTimer=setInterval(()=>{
    if(!capture||!['ready','speaking','recording'].includes(mode)){voicedAt=0;lastVoice=0;return;}

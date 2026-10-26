@@ -233,7 +233,11 @@ before EOF, odd-byte chunk boundaries, speech interruption, queued-source cancel
 recording pre-roll, and acknowledgment only after complete playback. API tests cover partial
 streams, explicit retries, cancellation cleanup, and interrupted-offer acceptance protection.
 PCM playback groups network fragments into 100 ms frames and prefixes the first frame with
-150 ms of silence to give the output device time to start without consuming the first word.
+500 ms of silence to give the output device time to start without consuming the first word.
+Initial playback waits for the pending microphone permission/setup to settle (grant or denial)
+so opening capture cannot overlap the first spoken word. Capture analysis and playback share
+one AudioContext; releasing the microphone disconnects its nodes without closing playback.
+The wait is cancellable by hanging up, and denying the microphone retains typed replies.
 Every original speech sample is retained, including utterances shorter than one frame and
 the final partial frame. The silent prefix is interruptible with the rest of the queue.
 This adds a small startup delay; physical speaker/headset acceptance remains necessary,
