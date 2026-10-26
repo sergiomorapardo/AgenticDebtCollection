@@ -27,4 +27,15 @@ def validate_confirmation(state: State, runtime: Runtime[AppContext]) -> dict:
             "confirmation_route": "response",
             "response_text": "La oferta dejó de ser válida o el saldo cambió. Debemos calcular y confirmar una nueva; no guardé un acuerdo.",
         }
+    if not ctx.offer_audio_completed:
+        schedule = "; ".join(
+            f"{item.amount_cop:,} COP el {item.due_date.isoformat()}" for item in offer.installments
+        )
+        total = sum(item.amount_cop for item in offer.installments)
+        proposal = f"Propuesta: {schedule}. Total: {total:,} COP, sin descuentos ni cargos adicionales. ¿Confirmas este importe y estas fechas? Responde confirmo o propone cambios."
+        return {
+            "confirmation_route": "response",
+            "response_text": "La oferta se interrumpió. Escúchala completa antes de confirmar. "
+            + proposal,
+        }
     return {"confirmation_route": "commitment", "confirmed_offer": offer.model_dump(mode="json")}

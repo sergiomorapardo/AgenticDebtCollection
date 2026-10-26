@@ -172,7 +172,8 @@ def test_partial_stream_cannot_acknowledge_or_implicitly_retry(session, tmp_path
     ) as client:
         client.get("/")
         state = api_post(client, "start").json()
-        assert client.get(state["audio_url"]).content == b"\x01\x00"
+        with pytest.raises(SpeechError, match="audio no terminó"):
+            client.get(state["audio_url"])
         current = client.get("/api/session").json()
         assert current["details"]["audio_status"] == "error"
         assert "private" not in json.dumps(current)
@@ -221,6 +222,24 @@ def test_playing_history_does_not_acknowledge_an_interrupted_offer(session):
     assert not session.context.repository.agreements()
 
 
+def test_interrupted_offer_is_represented_before_a_new_acceptance(session):
+    from pathlib import Path
+
+    original = offer(session)
+    session.interrupt_audio(Path(session.audio).name)
+    replay = session.send("confirmo")
+    assert replay["stage"] == "awaiting_confirmation"
+    assert replay["offer_id"] == original["offer_id"]
+    assert replay["text"].endswith(original["text"])
+    assert "Escúchala completa" in replay["text"]
+    assert not session.context.repository.agreements()
+    assert session.acknowledge_playback(session.audio)
+    session.interrupt_audio(Path(session.audio).name)  # A late interrupt cannot revoke completion.
+    assert session.audio_status == "complete" and session.played_audio == session.audio
+    session.send("confirmo")
+    assert len(session.context.repository.agreements()) == 1
+
+
 def test_interrupt_cancels_inflight_provider_and_rejects_stale_audio(session):
     import asyncio
     from pathlib import Path
@@ -264,6 +283,47 @@ def test_interrupt_cancels_inflight_provider_and_rejects_stale_audio(session):
     asyncio.run(run())
 
 
+def test_asgi_interrupt_closes_stream_from_another_request(session, tmp_path):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from fastapi.testclient import TestClient
+
+    from collections_lab.channels.voice_app import create_app
+
+    started, closed = Event(), Event()
+
+    class SlowSpeech(StreamingSpeech):
+        async def stream_synthesize(self, text):
+            try:
+                started.set()
+                yield b"\x01\x00"
+                await asyncio.sleep(60)
+            finally:
+                closed.set()
+
+    with (
+        TestClient(
+            create_app(SlowSpeech(), data_dir=tmp_path / "asgi", now=session.context.now),
+            base_url="http://127.0.0.1",
+            raise_server_exceptions=False,
+        ) as client,
+        ThreadPoolExecutor() as pool,
+    ):
+        client.get("/")
+        state = api_post(client, "start").json()
+        future = pool.submit(client.get, state["audio_url"])
+        assert started.wait(2)
+        response = api_post(
+            client, "interrupt", state=state, payload={"audio_id": state["audio_id"]}
+        )
+        assert response.status_code == 200 and response.json()["ready"]
+        assert closed.wait(2)
+        future.result(timeout=2)
+        assert client.get("/api/session").json()["details"]["audio_status"] == "interrupted"
+
+
 def test_dictated_number_is_normalized_in_saved_transcript(session, monkeypatch):
     session.send("Hola")
     session.send("123456789")
@@ -291,7 +351,7 @@ const html = fs.readFileSync(process.argv[2], 'utf8');
 const full = html.split('<script>')[1].split('</script>')[0];
 new vm.Script(full); // Also check syntax of the technical viewer.
 const script = full.split('// The viewer')[0].replace('restoreSession();', '');
-function fixture() {
+function fixture(readFailure=false,interruptFailure=false) {
  const calls=[], nodes=[], timers=new Map(), elements=new Map(); let eof=false, clock=1, rms=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
  const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
@@ -313,8 +373,9 @@ function fixture() {
   performance:{now:()=>clock},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},window:{MediaRecorder:Recorder,addEventListener(){}},
   setTimeout,clearTimeout,setInterval(fn,ms){timers.set(ms,fn);return ms;},clearInterval:id=>timers.delete(id),
   fetch:async(url,options={})=>{
-   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array([0,2,0]),done:false};return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
-   calls.push({url,body:options.body});
+   if(url.startsWith('/api/audio/')){let index=0;return {ok:true,body:{getReader:()=>({read:async()=>{index++;if(index===1)return {value:new Uint8Array([1]),done:false};if(index===2)return {value:new Uint8Array([0,2,0]),done:false};if(readFailure)throw new Error('truncated stream');return Promise.race([end,new Promise((_,reject)=>options.signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));},{once:true}))]);}})}};}
+   calls.push({url,body:options.body,headers:options.headers});
+   if(url==='/api/interrupt'&&interruptFailure){interruptFailure=false;return {ok:false,json:async()=>({detail:'temporary interrupt error'})};}
    if(url==='/api/playback')assert.ok(eof,'playback acknowledged before stream EOF');
    return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
   }
@@ -345,6 +406,22 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  await until(()=>second.nodes.length>0);second.releaseEnd();await complete;
  assert.equal(second.calls.filter(call=>call.url==='/api/playback').length,1);
  assert.equal(second.run('mode'),'ready');second.run('releaseMic();stopPlayback();');
+ const broken=fixture(true);await broken.run('playResponse(epoch)');
+ assert.equal(broken.calls.filter(call=>call.url==='/api/playback').length,0);
+ assert.ok(broken.nodes.every(node=>node.stopped));assert.equal(broken.run('mode'),'waiting');
+ broken.run('releaseMic();stopPlayback();');
+ const retry=fixture(false,true);const retryPlaying=retry.run('playResponse(epoch)');
+ await until(()=>retry.nodes.length>0);await retry.run('prepareMic()');
+ retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();");
+ await retryPlaying;retry.run('finishRecording()');
+ await until(()=>retry.run('mode')==='waiting');retry.run('recovery()');
+ await until(()=>retry.calls.some(call=>call.url==='/api/recording'));
+ const interrupts=retry.calls.filter(call=>call.url==='/api/interrupt');assert.equal(interrupts.length,2);
+ assert.equal(interrupts[0].headers['X-Request-ID'],interrupts[1].headers['X-Request-ID']);
+ retry.run('releaseMic();stopPlayback();');
+ const rapid=fixture();rapid.run("state.audio_url=null;setMode('ready');");await rapid.run('prepareMic()');
+ rapid.run("const previousRecorder=recorder;stopCapture();setMode('thinking');setMode('ready');if(previousRecorder===recorder||previousRecorder.state!=='inactive'||recorder.state!=='recording')throw new Error('capture lifecycle');");
+ rapid.run('releaseMic();stopPlayback();');
  console.log('PCM early playback, odd-byte boundaries, VAD interruption, queue cancellation, pre-roll, EOF acknowledgement: passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)

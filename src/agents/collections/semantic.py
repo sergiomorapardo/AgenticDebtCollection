@@ -11,7 +11,7 @@ from typing import Literal
 from anthropic import APIError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from agents.collections.numbers import NumberEvidence, identity_spans
+from agents.collections.numbers import NumberEvidence
 from agents.collections.prompts import PromptStage, render_prompt
 
 
@@ -352,11 +352,12 @@ Dates and identifiers are not monetary amounts. Keep identifiers as numeric_cand
         stage in {"awaiting_customer", "awaiting_identity"}
         or (context or {}).get("identity_verified") is False
     ):
-        spans = list(identity_spans(current))
-        tokens = [value for _, _, value in spans]
-        for index in reversed(range(len(spans))):
-            start, end, _ = spans[index]
-            current = current[:start] + f"<number_{index}>" + current[end:]
+
+        def replace(match):
+            tokens.append(match.group())
+            return f"<number_{len(tokens) - 1}>"
+
+        current = re.sub(r"[0-9]+", replace, current)
     payload = {
         "current_message": current,
         "numeric_candidates": [
@@ -371,8 +372,7 @@ Dates and identifiers are not monetary amounts. Keep identifiers as numeric_cand
             turn = _mock_turn(
                 text, today=today, stage=stage, ctx=ctx, tokens=tokens, context=context or {}
             )
-            result = _resolve(turn, tokens, stage, "mock")
-            return _gate_voice_acceptance(result, ctx)
+            return _resolve(turn, tokens, stage, "mock")
         from langchain_anthropic import ChatAnthropic
 
         from agents.collections.streaming import internal_model_call
@@ -405,6 +405,7 @@ Dates and identifiers are not monetary amounts. Keep identifiers as numeric_cand
                     and value == 1
                     and turn.intent == "promise"
                     and turn.frequency == "one_off"
+                    and not re.search(r"\b(no|nunca|jamás)\b", text.lower())
                     and re.search(
                         r"\b(pago completo|pagar (?:el )?total|pagar todo|todo el saldo)\b",
                         text.lower(),
@@ -413,12 +414,6 @@ Dates and identifiers are not monetary amounts. Keep identifiers as numeric_cand
                     continue
                 raise ValueError("Numeric value requires current-message evidence")
             evidence.verify(text, value)
-        return _gate_voice_acceptance(_resolve(turn, tokens, stage, "classified"), ctx)
+        return _resolve(turn, tokens, stage, "classified")
     except (APIError, ValueError, TimeoutError, ConnectionError):
         return TurnResult(TurnUnderstanding(), "model_error")
-
-
-def _gate_voice_acceptance(result, ctx):
-    if not getattr(ctx, "offer_audio_completed", True) and result.turn.intent == "accept_offer":
-        return TurnResult(TurnUnderstanding(intent="unclear"), result.status)
-    return result

@@ -120,7 +120,8 @@ within this window avoids duplicate provider calls and business writes.
   or concurrent stream cannot start a second charged request; use **Reintentar audio** explicitly.
   `tts_first_chunk_seconds` measures time to the provider's first chunk, separately from total TTS.
 - Interruptions unlock a new reply, including a counteroffer or request to stop. They never
-  mark the offer heard. Backend voice context downgrades acceptance of an unheard offer;
+  mark the offer heard. The backend confirmation node re-presents an unheard offer in full
+  instead of committing it, explains why, and waits for a new acceptance after playback;
   confirmation requires a completed stream and playback acknowledgment for the current audio.
   Stale playback events cannot unlock a regenerated offer.
 - **Reintentar audio** only synthesizes the saved response. An offer with failed audio
@@ -221,6 +222,13 @@ The browser state-machine regression uses Node when available and exercises PCM 
 before EOF, odd-byte chunk boundaries, speech interruption, queued-source cancellation,
 recording pre-roll, and acknowledgment only after complete playback. API tests cover partial
 streams, explicit retries, cancellation cleanup, and interrupted-offer acceptance protection.
+Partial provider failures abort the HTTP body, so the browser clears queued audio without
+acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
+still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
+
+Follow-ups: replace the bounded arm-time recording with a codec-safe rolling pre-roll buffer
+to avoid uploading idle silence; calibrate echo/noise thresholds on physical devices; and
+move PCM cache writes off the event loop if concurrent-call measurements justify it.
 
 Live adapter validation for this change synthesized `Uno.` through the PCM endpoint and
 transcribed it as `1`. Claude Haiku returned validated numeric fields for one installment,

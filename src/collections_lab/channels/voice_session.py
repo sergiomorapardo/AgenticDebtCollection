@@ -447,8 +447,9 @@ class VoiceSession:
                 return False
             self.played_audio = self.audio
             if (
-                self.reply.get("offer_id") == self._offer_id
-                and self.reply["text"] == self._offer_text
+                self._offer_text is not None
+                and self.reply.get("offer_id") == self._offer_id
+                and self.reply["text"].endswith(self._offer_text)
             ):
                 self._unheard_offer = None
             with (self.directory / "playback-acknowledgements.jsonl").open("a") as stream:
@@ -619,6 +620,8 @@ class VoiceSession:
         with self._audio_lock:
             if not self.audio or Path(self.audio).name != audio_id:
                 raise VoiceInputError("Ese audio ya no corresponde a la respuesta actual.")
+            if self.played_audio == self.audio:
+                return
             self.cancel_audio()
             self.interrupted_audio = self.audio
             self.played_audio = None
@@ -671,8 +674,8 @@ class VoiceSession:
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - sanitize failures after streaming headers
-            # Errors after response headers must never expose provider bodies or secrets.
-            success = False
+            # Abort the HTTP stream, rather than turning truncated audio into a clean EOF.
+            raise SpeechError("El audio no terminó. Usa Reintentar audio.") from None
         finally:
             partial.unlink(missing_ok=True)
             self.trace.finish(event_id, failed=not success)

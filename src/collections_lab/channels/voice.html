@@ -56,6 +56,7 @@ const $=id=>document.getElementById(id);
 let state=null, mode='idle', epoch=0, recorder=null, stream=null, player=null, recovery=null;
 let startedAt=null, stoppedAt=null, recordTimer=null, discardRecording=false;
 let audioContext=null, micContext=null, analyser=null, micTimer=null, capture=null, micPending=null;
+const VOICE_THRESHOLD=.035, VOICE_HOLD_MS=120, SILENCE_MS=900, MAX_RECORDING_MS=60000;
 const labels={idle:'Listo para conversar',connecting:'Conectando…',ready:'Es tu turno',recording:'Te escucho…',thinking:'Preparando respuesta…',speaking:'El agente está hablando',waiting:'Respuesta lista',ended:'Llamada terminada',closing:'Terminando llamada…'};
 function setMode(next){mode=next;$('card').dataset.mode=next;$('status').textContent=labels[next];const ready=next==='ready'||next==='speaking';$('mic').disabled=!(ready||next==='recording');$('text').disabled=!ready;$('send').disabled=!ready;$('start').disabled=next==='connecting';$('start').hidden=!['idle','connecting','ended'].includes(next);$('controls').hidden=['idle','connecting','ended'].includes(next);$('hangup').disabled=next==='closing';$('mic-symbol').setAttribute('href',next==='recording'?'#stop-icon':'#mic-icon');$('mic').setAttribute('aria-label',next==='recording'?'Detener y enviar respuesta':'Grabar respuesta');$('mic-label').textContent=next==='recording'?'Enviar':'Responder';$('hint').textContent=next==='recording'?'Habla; enviaremos al terminar. También puedes pulsar Enviar.':next==='ready'?'Habla o pulsa el micrófono para responder.':next==='speaking'?'Puedes interrumpir hablando o pulsando Responder. Usa auriculares para evitar eco.':next==='ended'?'Gracias por conversar. Puedes iniciar una llamada nueva.':next==='thinking'?'Estamos procesando tu mensaje.':'El micrófono permanece activo durante la llamada si das permiso.';if(next==='ended')releaseMic();if(ready)armCapture();}
 function showNotice(message, label=null, fn=null){$('notice').hidden=!message;$('notice-text').textContent=message||'';$('recover').hidden=!label;$('recover').textContent=label||'';recovery=fn;}
@@ -124,15 +125,15 @@ async function prepareMic(){
   micTimer=setInterval(()=>{
    if(!capture||!['ready','speaking','recording'].includes(mode)){voicedAt=0;lastVoice=0;return;}
    analyser.getFloatTimeDomainData(samples);const rms=Math.sqrt(samples.reduce((sum,value)=>sum+value*value,0)/samples.length),now=performance.now();
-   if(rms>.035){lastVoice=now;voicedAt||=now;if(!capture.active&&now-voicedAt>=120)beginRecording();}
-   else{voicedAt=0;if(capture?.active&&lastVoice&&now-lastVoice>900)finishRecording();}
+   if(rms>VOICE_THRESHOLD){lastVoice=now;voicedAt||=now;if(!capture.active&&now-voicedAt>=VOICE_HOLD_MS)beginRecording();}
+   else{voicedAt=0;if(capture?.active&&lastVoice&&now-lastVoice>SILENCE_MS)finishRecording();}
   },30);armCapture();
  })().finally(()=>{micPending=null;});return micPending;
 }
 function armCapture(){
  if(!stream||capture||!['ready','speaking'].includes(mode)||state?.finished)return;
  const mime=['audio/webm;codecs=opus','audio/mp4','audio/ogg;codecs=opus','audio/webm'].find(type=>MediaRecorder.isTypeSupported(type));if(!mime)return;
- const item={recorder:new MediaRecorder(stream,{mimeType:mime}),chunks:[],bytes:0,active:false,discard:false,interrupt:Promise.resolve()};capture=item;recorder=item.recorder;
+ const item={recorder:new MediaRecorder(stream,{mimeType:mime}),chunks:[],bytes:0,active:false,discard:false,interrupt:Promise.resolve(),startedAt:performance.now()};capture=item;recorder=item.recorder;
  recorder.ondataavailable=event=>{item.bytes+=event.data.size;if(item.bytes>10*1024*1024){item.discard=true;stopCapture();setMode('waiting');showNotice('La grabación es demasiado grande. Pulsa Responder para intentarlo de nuevo.');}else if(event.data.size)item.chunks.push(event.data);};
  recorder.onerror=()=>{releaseMic();showNotice('Falló el micrófono. Puedes responder por escrito.');};
  recorder.onstop=async()=>{
@@ -140,14 +141,14 @@ function armCapture(){
   const blob=new Blob(item.chunks,{type:mime});if(!blob.size){setMode('ready');return;}
   const send=async()=>{try{await item.interrupt;if(item.ticket===epoch)await act('recording',blob,{ticket:item.ticket});}catch(error){if(item.ticket!==epoch)return;setMode('waiting');showNotice('No pudimos confirmar la interrupción. Tu grabación sigue disponible.','Reintentar envío',()=>{item.interrupt=request('interrupt',{audio_id:item.audioId},item.interruptKey,item.callId);send();});}};await send();
  };
- recorder.start(100);recordTimer=setTimeout(()=>{if(item.active)finishRecording();else{stopCapture();armCapture();}},60000);
+ recorder.start(100);recordTimer=setTimeout(()=>{if(item.active)finishRecording();else{stopCapture();armCapture();}},MAX_RECORDING_MS);
 }
 function beginRecording(){
  if(!capture||capture.active||!['ready','speaking'].includes(mode))return;
  const item=capture,interrupted=mode==='speaking';item.active=true;item.ticket=++epoch;item.callId=state.session_id;item.audioId=state.audio_id;item.interruptKey=crypto.randomUUID();
  stopPlayback();showNotice(null);setMode('recording');
  if(interrupted){item.interrupt=request('interrupt',{audio_id:item.audioId},item.interruptKey,item.callId).then(data=>{if(item.ticket===epoch)state=data;});item.interrupt.catch(()=>{});}
- clearTimeout(recordTimer);recordTimer=setTimeout(finishRecording,60000);
+ clearTimeout(recordTimer);recordTimer=setTimeout(finishRecording,Math.max(1,MAX_RECORDING_MS-(performance.now()-item.startedAt)));
 }
 function finishRecording(){if(!capture?.active)return;const item=capture;capture=null;clearTimeout(recordTimer);item.recorder.stop();setMode('thinking');}
 $('start').onclick=()=>{stopPlayback();audioContext??=new AudioContext();audioContext.resume().catch(()=>{});act('start');prepareMic().catch(()=>showNotice('Permite el micrófono para interrumpir hablando, o usa texto.'));};

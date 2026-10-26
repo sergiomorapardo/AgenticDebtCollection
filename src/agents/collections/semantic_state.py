@@ -3,7 +3,6 @@
 import hashlib
 import re
 
-from agents.collections.numbers import identity_spans
 from agents.collections.semantic import TurnResult, TurnUnderstanding
 
 
@@ -35,12 +34,10 @@ def current_understanding(state) -> TurnResult | None:
         ):
             raise ValueError("Semantic result does not belong to this turn")
         turn = TurnUnderstanding.model_validate(envelope["turn"])
-        tokens = [
-            value
-            for _, _, value in identity_spans(
-                re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", state["text"])
-            )
-        ]
+        tokens = re.findall(
+            r"[0-9]+",
+            re.sub(r"https?://\S+|www\.\S+|[\w.+-]+@[\w.-]+", "[redacted]", state["text"]),
+        )
         for field, index, role in (
             ("identity_candidate", turn.identity_token, "identity"),
             ("verification_candidate", turn.code_token, "verification_code"),
