@@ -144,6 +144,10 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         ("200000 COP 3 cuotas", "doscientos mil pesos 3 cuotas"),
         ("Importes en COP; COPIA del acuerdo.", "Importes en pesos; COPIA del acuerdo."),
         ("0 COP", "cero pesos"),
+        ("2026-01-01", "primero de enero de dos mil veintiséis"),
+        ("2026-10-21", "veintiuno de octubre de dos mil veintiséis"),
+        ("2021-12-31", "treinta y uno de diciembre de dos mil veintiuno"),
+        ("2024-02-29", "veintinueve de febrero de dos mil veinticuatro"),
         ("21 COP", "veintiún pesos"),
         ("31 COP", "treinta y un pesos"),
         ("100 COP", "cien pesos"),
@@ -159,10 +163,13 @@ def test_elevenlabs_stream_delivers_first_chunk_before_completion_and_closes():
         ("Saldo: 1.000 COP.", "Saldo: mil pesos."),
         ("Saldo: $1 COP.", "Saldo: un peso."),
         ("Saldo: 12,50 cop.", "Saldo: doce pesos con cincuenta centavos."),
-        ("Cuota 200\u00a0COP el 2026-10-20.", "Cuota doscientos pesos el 2026-10-20."),
+        (
+            "Cuota 200\u00a0COP el 2026-10-20.",
+            "Cuota doscientos pesos el veinte de octubre de dos mil veintiséis.",
+        ),
     ],
 )
-def test_currency_is_spoken_as_pesos_in_both_adapters(written, spoken):
+def test_currency_and_dates_are_spoken_naturally_in_both_adapters(written, spoken):
     import asyncio
 
     seen = []
@@ -189,10 +196,12 @@ def test_spoken_integer_amounts_round_trip_through_independent_number_parser():
         assert number_value(_spanish_integer(value)) == value
 
 
-@pytest.mark.parametrize("written", ["1.234.56 COP", "1000000000000000000 COP"])
-def test_ambiguous_or_unsupported_currency_fails_before_paid_request(written):
+@pytest.mark.parametrize(
+    "written", ["1.234.56 COP", "1000000000000000000 COP", "2026-02-29", "2026-13-20"]
+)
+def test_invalid_currency_or_date_fails_before_paid_request(written):
     def handle(request):
-        raise AssertionError("Unsupported amounts must not reach the provider")
+        raise AssertionError("Invalid speech values must not reach the provider")
 
     speech = ElevenLabsSpeech("test-key", "voice-id", transport=httpx.MockTransport(handle))
     with pytest.raises(SpeechError):
@@ -453,7 +462,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const html=fs.readFileSync(process.argv[2],'utf8'),full=html.split('<script>')[1].split('</script>')[0];
 new vm.Script(full);
 const script=full.split('// The viewer')[0].replace('restoreSession();','');
-function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,255,255],blocked=false,protect=true,holdReady=false}={}){
+function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,255,255],blocked=false,holdReady=false}={}){
  const calls=[],audios=[],blobs=new Map(),revoked=[],timers=new Map(),elements=new Map();let eof=false,clock=1,rms=0,aborted=false,reads=0;
  const element=()=>({dataset:{},classList:{toggle(){}},append(){},replaceChildren(){},setAttribute(){},focus(){},querySelector(){return element();},value:'',textContent:''});
  const document={documentElement:{dataset:{}},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,createTextNode:text=>text};
@@ -470,7 +479,7 @@ function fixture({failure=false,interruptFailure=false,bytes=[1,0,255,127,0,128,
   if(url==='/api/playback'){assert.ok(eof);assert.ok(audios.at(-1).ended,'must wait for native ended event');}
   return {ok:true,json:async()=>({session_id:'call',audio_id:'current.pcm',audio_format:'pcm_s16le_24000',ready:true,history:[],finished:false,details:{}})};
  }};
- sandbox.localStorage={getItem:key=>key==='hablemos-protect-audio'?String(protect):null,setItem(){}};
+ sandbox.localStorage={getItem:()=>null,setItem(){}};
  const context=vm.createContext(sandbox);vm.runInContext(script,context);const run=code=>vm.runInContext(code,context);
  run("state={session_id:'call',audio_id:'current.pcm',audio_url:'/api/audio/current.pcm',audio_format:'pcm_s16le_24000',finished:false,history:[]};epoch=1;");
  return {run,calls,audios,blobs,revoked,releaseEnd,get reads(){return reads;},get aborted(){return aborted;},tick(value){clock+=70;rms=value;timers.get(30)?.();},close(){run('releaseMic();stopPlayback();');}};
@@ -484,8 +493,7 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  assert.equal(Buffer.from(wav).subarray(0,4).toString(),'RIFF');assert.equal(Buffer.from(wav).subarray(8,12).toString(),'WAVE');
  assert.equal(view.getUint32(4,true),72044);assert.equal(view.getUint16(20,true),1);assert.equal(view.getUint16(22,true),1);assert.equal(view.getUint32(24,true),24000);assert.equal(view.getUint32(28,true),48000);assert.equal(view.getUint16(32,true),2);assert.equal(view.getUint16(34,true),16);assert.equal(view.getUint32(40,true),72008);
  assert.deepEqual(Array.from(new Uint8Array(wav,72044)),[1,0,255,127,0,128,255,255],'speech bytes retained exactly after activation signal');
- const prefix=new DataView(wav,44,72000);let energy=0;for(let i=0;i<36000;i++){const sample=prefix.getInt16(i*2,true);energy+=sample*sample;assert.ok(Math.abs(sample)<=1475);}assert.ok(Math.sqrt(energy/36000)>1000,'activation must contain a real low-level signal, not silence');
- const plain=fixture({protect:false}),plainPlayback=plain.run('playResponse(epoch)');plain.releaseEnd();await plainPlayback;const plainWav=await plain.blobs.values().next().value.arrayBuffer();assert.equal(plainWav.byteLength,52);assert.deepEqual(Array.from(new Uint8Array(plainWav,44)),[1,0,255,127,0,128,255,255]);plain.close();
+ const prefix=new DataView(wav,44,72000);let energy=0;for(let i=0;i<36000;i++){const sample=prefix.getInt16(i*2,true);energy+=sample*sample;assert.ok(Math.abs(sample)<=1475);}assert.ok(Math.sqrt(energy/36000)>900,'activation must contain a low-level carrier, not silence');assert.equal(prefix.getInt16(0,true),0);assert.equal(prefix.getInt16(71998,true),0);for(let i=1;i<36000;i++)assert.ok(Math.abs(prefix.getInt16(i*2,true)-prefix.getInt16((i-1)*2,true))<=6,'no previous audible whistle or abrupt edge');
  assert.equal(first.calls.length,0);await first.run('prepareMic()');first.run("capture.recorder.ondataavailable({data:new Blob(['initial syllable'])});");
  const oldEnded=first.audios[0].onended;first.tick(.1);first.tick(.1);first.tick(.1);
  assert.equal(first.run('mode'),'recording');assert.ok(first.audios[0].paused);assert.equal(first.revoked.length,1);oldEnded();
@@ -502,7 +510,7 @@ const until=async predicate=>{for(let i=0;i<100;i++){if(predicate())return;await
  const retry=fixture({interruptFailure:true}),retryPlayback=retry.run('playResponse(epoch)');retry.releaseEnd();await retryPlayback;await retry.run('prepareMic()');retry.run("capture.recorder.ondataavailable({data:new Blob(['uno'])});beginRecording();finishRecording();");await until(()=>retry.run('mode')==='waiting');retry.run('recovery()');await until(()=>retry.calls.some(c=>c.url==='/api/recording'));const interrupts=retry.calls.filter(c=>c.url==='/api/interrupt');assert.equal(interrupts.length,2);assert.equal(interrupts[0].headers['X-Request-ID'],interrupts[1].headers['X-Request-ID']);retry.close();
  const preparing=fixture({holdReady:true}),preparation=preparing.run('playResponse(epoch)');preparing.releaseEnd();await until(()=>preparing.audios.length===1);assert.ok(!preparing.audios[0].playing);preparing.audios[0].ready();await preparation;assert.ok(preparing.audios[0].playing);preparing.close();
  const paused=fixture({holdReady:true}),pause=paused.run('playResponse(epoch)');paused.releaseEnd();await until(()=>paused.audios.length===1);assert.ok(!paused.audios[0].playing);paused.run('epoch++;stopPlayback();');await pause;assert.ok(!paused.audios[0].playing);assert.equal(paused.calls.length,0);assert.equal(paused.revoked.length,1);paused.close();
- console.log('Native WAV: optional output activation, exact speech samples, complete download, interruption, cancellation, mic races, autoplay recovery, ended-only acknowledgment passed');
+ console.log('Native WAV: automatic output activation, exact speech samples, complete download, interruption, cancellation, mic races, autoplay recovery, ended-only acknowledgment passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
     result = subprocess.run(

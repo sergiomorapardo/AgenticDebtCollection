@@ -72,7 +72,7 @@ html[data-theme=glass] :is(button,input,summary,select):focus-visible{outline-co
 <button class="text-button" id="transcript-toggle" aria-expanded="false" aria-controls="transcript"><svg aria-hidden="true"><use href="#chat-icon"/></svg><span>Ver conversación o escribir</span></button>
 <div class="drawer" id="transcript" hidden><h3>Tu conversación aparece aquí</h3><div class="messages" id="messages" role="log" aria-live="polite" aria-label="Transcripción de la conversación"></div><form class="text-form" id="text-form"><input id="text" aria-label="Respuesta por escrito" placeholder="Escribe tu respuesta…" maxlength="4000" autocomplete="off" disabled><button type="submit" id="send" aria-label="Enviar respuesta" disabled><svg aria-hidden="true"><use href="#arrow-icon"/></svg></button></form></div>
 </section>
-<div class="bottom"><p><label><input type="checkbox" id="protect-audio" checked aria-describedby="protect-audio-help"> Evitar cortes al inicio del audio</label><br><span id="protect-audio-help">Señal suave de 1,5 segundos antes de cada respuesta.</span></p><p>Simulación con datos ficticios. No se realiza una llamada telefónica.<br>El audio se procesa con ElevenLabs y consume créditos.</p><p>Cédula de prueba: <code>123456789</code> · Código: <code>1111</code></p><details><summary>Más datos para probar ⌄</summary><p>Saldo ficticio: <code>$600.000 COP</code><br>También puedes usar <code>1000000001</code>.<br><span id="provider"></span></p></details></div>
+<div class="bottom"><p>Simulación con datos ficticios. No se realiza una llamada telefónica.<br>El audio se procesa con ElevenLabs y consume créditos.</p><p>Cédula de prueba: <code>123456789</code> · Código: <code>1111</code></p><details><summary>Más datos para probar ⌄</summary><p>Saldo ficticio: <code>$600.000 COP</code><br>También puedes usar <code>1000000001</code>.<br><span id="provider"></span></p></details></div>
 </div>
 <aside class="trace-panel" id="trace-panel" aria-label="Flujo técnico del agente" hidden>
 <div class="trace-header"><div><h2 id="trace-heading" tabindex="-1">Flujo del agente</h2><p>El grafo real, paso a paso. Solo para quien quiera mirar dentro.</p></div><button class="trace-close" id="trace-close" aria-label="Ocultar flujo técnico">×</button></div>
@@ -95,14 +95,13 @@ let startedAt=null, stoppedAt=null, recordTimer=null, discardRecording=false;
 let audioContext=null, micSource=null, analyser=null, micTimer=null, capture=null, micPending=null;
 const VOICE_THRESHOLD=.035, VOICE_HOLD_MS=120, SILENCE_MS=900, MAX_RECORDING_MS=60000;
 const PCM_RATE=24000;
-let protectAudio=true;try{protectAudio=localStorage.getItem('hablemos-protect-audio')!=='false';}catch{}
-$('protect-audio').checked=protectAudio;
-$('protect-audio').onchange=()=>{protectAudio=$('protect-audio').checked;try{localStorage.setItem('hablemos-protect-audio',String(protectAudio));}catch{}};
 function audioActivationPrefix(){
- // A real signal wakes output devices that discard speech after silence; a timer does not.
- // Match the 1.5-second signal verified with a local speaker/microphone capture.
- const prefix=new ArrayBuffer(PCM_RATE*1.5*2),view=new DataView(prefix);
- for(let index=0;index<prefix.byteLength/2;index++)view.setInt16(index*2,Math.round(32767*.045*Math.min(1,index/480)*Math.sin(2*Math.PI*660*index/PCM_RATE)),true);
+ // A sub-audible carrier keeps the output active without the previous whistle.
+ const samples=PCM_RATE*1.5,prefix=new ArrayBuffer(samples*2),view=new DataView(prefix);
+ for(let index=0;index<samples;index++){
+  const envelope=Math.min(1,index/(PCM_RATE*.15),(samples-1-index)/(PCM_RATE*.15));
+  view.setInt16(index*2,Math.round(32767*.045*envelope*Math.sin(2*Math.PI*12*index/PCM_RATE)),true);
+ }
  return prefix;
 }
 const labels={idle:'Listo para conversar',connecting:'Conectando…',ready:'Es tu turno',recording:'Te escucho…',thinking:'Preparando respuesta…',speaking:'El agente está hablando',waiting:'Respuesta lista',ended:'Llamada terminada',closing:'Terminando llamada…'};
@@ -156,7 +155,7 @@ async function playPCM(ticket){
   if(!size||size%2)throw new Error('El audio llegó incompleto.');
   if(micPending){setMode('waiting');showNotice('Confirma el permiso del micrófono en el navegador. Si lo rechazas, podrás responder por escrito.');await micPending.catch(()=>{});}
   if(ticket!==epoch||player!==current)return;
-  const prefix=protectAudio?audioActivationPrefix():new ArrayBuffer(0),audioSize=size+prefix.byteLength;
+  const prefix=audioActivationPrefix(),audioSize=size+prefix.byteLength;
   const header=new ArrayBuffer(44),view=new DataView(header);
   const tag=(offset,text)=>{for(let index=0;index<text.length;index++)view.setUint8(offset+index,text.charCodeAt(index));};
   tag(0,'RIFF');view.setUint32(4,audioSize+36,true);tag(8,'WAVE');tag(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,PCM_RATE,true);view.setUint32(28,PCM_RATE*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);tag(36,'data');view.setUint32(40,audioSize,true);

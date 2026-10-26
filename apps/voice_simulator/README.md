@@ -27,7 +27,7 @@ sequenceDiagram
     API->>Speech: Stream validated response as PCM
     Speech-->>API: Audio chunks
     API-->>UI: Audio chunks
-    UI->>User: Play complete WAV with optional output activation
+    UI->>User: Prepare output and play complete WAV
     User->>UI: Speak to interrupt
     UI->>API: Interrupt current audio ID
     API->>Speech: Cancel synthesis stream
@@ -51,14 +51,13 @@ available to your account through the API. Defaults are `scribe_v2` and
 `eleven_multilingual_v2` with mono 24 kHz signed 16-bit PCM over the
 [ElevenLabs streaming endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 The browser receives the complete PCM recording, wraps it losslessly in a mono WAV header,
-and plays it through the native audio element. **Evitar cortes al inicio del audio** is enabled
-by default: it prepends a soft 1.5-second activation signal within the same WAV, preserving
-all speech bytes. This addresses outputs that discard initial sound after silence. A local
-microphone capture on an HDMI monitor lost the original greeting's first word; with this
-signal, the captured onset and greeting were retained. A pre-playback timer did not help.
-The option can be disabled for other outputs; its preference persists when storage is available.
-It adds 1.5 seconds before each response, including retries. Playback still waits for the complete
-download and microphone/audio readiness; interruption and hangup also stop the activation signal.
+and plays it through the native audio element. Each response automatically prepends a
+1.5-second, 12 Hz carrier with gradual edges in the same WAV, preserving all speech bytes.
+There is no audio-protection toggle or audible 660 Hz whistle. This addresses outputs that
+suppress initial sound after silence. Both a pre-playback timer and a silent prefix failed
+in local HDMI-speaker measurements; the carrier preserved the five measured response onsets.
+The preparation adds 1.5 seconds to each response, including retries. Playback waits for the
+complete download and microphone/audio readiness; interruption and hangup stop preparation too.
 No system audio settings are changed. This measured workaround is not a guarantee for every device.
 There are no automatic charged retries. The legacy synchronous adapter still produces MP3.
 Both speech paths render `COP` as `pesos` (`1 COP` as `un peso`) only in the provider request:
@@ -67,6 +66,8 @@ Currency amounts are spelled out deterministically in Spanish, including thousan
 masculine endings, and cents when explicitly given. Ambiguous separators and amounts outside
 the supported range fail before a paid request instead of guessing a pronunciation. Persisted
 responses, transcripts, and business amounts retain their original representation.
+Valid ISO dates are expanded only for speech: `2026-10-20` becomes
+`veinte de octubre de dos mil veintiséis`. Invalid calendar dates fail before synthesis.
 
 For interpretation with Claude Haiku, set `ANTHROPIC_API_KEY` and run:
 
@@ -243,18 +244,21 @@ source reload deferred during active calls, invalid-edit recovery, session isola
 recovery, non-blocking reads, error redaction, transaction rollback, and graph-turn quarantine.
 Ruff, JavaScript syntax, lockfile validation, and wheel construction also pass.
 The browser state-machine regression uses Node when available and exercises complete-download
-WAV playback, odd-byte network boundaries, exact PCM sample preservation without a prefix,
+WAV playback, odd-byte network boundaries, exact speech-sample preservation after output preparation,
 speech interruption, download cancellation, recording pre-roll, and acknowledgment only after
 the native audio element fires `ended`. It also covers microphone setup/denial, autoplay
 recovery, and object URL cleanup. API tests cover partial streams, explicit retries, cancellation
 cleanup, and interrupted-offer acceptance protection.
-The user requested the same full-file native playback as the Multilingual v2 B sample after
-fragmented playback, added silence, and a diagnostic tone did not resolve audible clipping.
-The source model and playback mechanism now match that sample; physical acceptance of the
-updated simulator remains necessary. No diagnostic tone is included in the application.
-Initial playback waits for pending microphone setup (grant or denial), then for native audio
-readiness and a one-second startup timer requested after physical clipping reports. The wait is
-cancellable by hanging up, and denying the microphone retains typed replies.
+Native playback uses the complete Multilingual v2 response, matching the B comparison sample.
+Initial playback waits for microphone setup (grant or denial) and native audio readiness.
+Hanging up cancels the wait; denying the microphone retains typed replies.
+A full live Haiku/ElevenLabs call used the synthetic ID, verification, a three-installment
+proposal, and confirmation. An 82-second local-only speaker capture replayed all five complete
+responses with the shipped WAV preparation. Offline waveform alignment and transcription
+retained all five opening words and endings, and recognized COP 600,000 and COP 200,000.
+The local transcriber rendered the spoken year as 2016 in both source and microphone audio;
+year pronunciation remains an acceptance limitation, not a verified success. Recordings were
+not uploaded, and all capture microphone tracks were stopped after the test.
 Partial provider failures abort the HTTP body, so the browser rejects incomplete audio without
 acknowledging a truncated offer. Numeric evidence accepts accent/Unicode variants while
 still rejecting partial numeric expressions and ranges such as `2-3` as one exact count.
@@ -278,7 +282,7 @@ Chrome verification with previously generated audio covers greeting/reply autopl
 reply controls after playback, Enter-to-send, session reload, and hangup. The cached audio is
 a UI test double, not a validation of newly generated speech content. Responsive layout is
 checked at desktop and mobile widths. The technical viewer is checked for its default
-hidden state, show/hide controls, execution highlighting, and expandable event details. Physical microphone capture still needs manual acceptance.
+hidden state, show/hide controls, execution highlighting, and expandable event details. Further microphone/echo conditions still need acceptance.
 
 Earlier live adapter validation confirmed TTS MP3 generation with the configured designed
 voice and Scribe v2 transcription of `Quiero tres cuotas desde mañana`. In the earlier UI,
@@ -306,3 +310,16 @@ business session across separate voice calls remains unsupported by this isolate
 - [ ] **TODO:** Resume the same business session across separate voice calls after fresh
   identity verification and an explicit customer request, preserving history and avoiding
   duplicate agreements. See the [roadmap](../../docs/ROADMAP.md#todo-resume-a-business-session-across-voice-calls).
+
+### Pending date-dialogue acceptance
+
+- Interpret a weekday such as `el viernes` relative to the configured Colombia clock, and
+  ask which occurrence when the context does not identify one.
+- Accept a day-of-month reply such as `el 20` without treating it as an amount or installment
+  count; ask for the month when needed, including month-end and year-boundary cases.
+- Preserve the selected plan while clarifying the date, then read back the full resolved
+  date and require explicit confirmation before recording a commitment.
+- Verify natural spoken dates, including the correct year, with real provider audio.
+
+These dialogue acceptance cases are pending; deterministic ISO-to-speech formatting alone
+is not evidence that ambiguous date input is handled correctly.

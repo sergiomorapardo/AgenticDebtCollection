@@ -1,6 +1,7 @@
 """Small, bounded ElevenLabs adapters; credentials never reach the browser."""
 
 import re
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -118,8 +119,37 @@ def _spoken_currency(raw: str) -> str:
     return words
 
 
+def _spoken_date(raw: str) -> str:
+    """Render a validated ISO date as natural Colombian Spanish speech."""
+    try:
+        value = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise SpeechError("La fecha no es válida para pronunciación.") from exc
+    months = (
+        "enero",
+        "febrero",
+        "marzo",
+        "abril",
+        "mayo",
+        "junio",
+        "julio",
+        "agosto",
+        "septiembre",
+        "octubre",
+        "noviembre",
+        "diciembre",
+    )
+
+    def cardinal(number):
+        words = _spanish_integer(number)
+        return re.sub(r"veintiún$", "veintiuno", re.sub(r"\bun$", "uno", words))
+
+    day = "primero" if value.day == 1 else cardinal(value.day)
+    return f"{day} de {months[value.month - 1]} de {cardinal(value.year)}"
+
+
 def _spoken_text(text: str) -> str:
-    """Render COP naturally only at the speech boundary, retaining written responses."""
+    """Render currency and dates naturally at TTS, retaining written responses."""
     if not text.strip() or len(text) > 4000:
         raise SpeechError("La respuesta debe tener entre 1 y 4000 caracteres.")
 
@@ -129,6 +159,9 @@ def _spoken_text(text: str) -> str:
     text = re.sub(r"(?<![\w.,])\$?(\d+(?:[.,]\d+)*)\s+COP\b", amount, text, flags=re.IGNORECASE)
     text = re.sub(r"\bCOP\s+\$?(\d+(?:[.,]\d+)*)", amount, text, flags=re.IGNORECASE)
     text = re.sub(r"\bCOP\b", "pesos", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(?<![\w-])\d{4}-\d{2}-\d{2}(?![\w-])", lambda match: _spoken_date(match[0]), text
+    )
     if len(text) > 4000:
         raise SpeechError("La respuesta hablada supera los 4000 caracteres.")
     return text
