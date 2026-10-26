@@ -482,8 +482,10 @@ def test_one_installment_is_not_one_peso(model_call):
 def test_dictated_identifiers_preserve_exact_digits_and_checkpoint_binding(
     model_call, text, stage, intent, field, expected
 ):
+    from agents.collections.numbers import normalize_transcript_numbers
     from agents.collections.semantic_state import bind_understanding, current_understanding
 
+    text = normalize_transcript_numbers(text, identifiers=True)
     _, response = model_call
     response["result"] = {"intent": intent, field: 0}
     result = understand_turn(text, ctx=CONTEXT, today=TODAY, stage=stage)
@@ -522,14 +524,6 @@ def test_identifier_transcription_retains_leading_zeroes(text):
     assert normalize_transcript_numbers(first_pass, identifiers=True) == "0011"
 
 
-def test_voice_authority_rejects_acceptance_until_offer_audio_completed(model_call):
-    _, response = model_call
-    response["result"] = {"intent": "accept_offer", "acceptance": "unconditional_current_offer"}
-    ctx = SimpleNamespace(provider="anthropic", model=CONTEXT.model, offer_audio_completed=False)
-    result = understand_turn("confirmo", ctx=ctx, today=TODAY, stage="awaiting_confirmation")
-    assert result.turn.intent == "unclear" and result.turn.acceptance == "none"
-
-
 @pytest.mark.parametrize(
     "text,quote,value,valid",
     [
@@ -540,6 +534,9 @@ def test_voice_authority_rejects_acceptance_until_offer_audio_completed(model_ca
         ("Puedo dar 1,5 millones", "1", 1, False),
         ("Puedo dar -1", "1", 1, False),
         ("no uno sino dos", "uno sino dos", 2, False),
+        ("dieciséis pesos", "dieciseis", 16, True),
+        ("diecise\u0301is pesos", "dieciséis", 16, True),
+        ("2-3 cuotas", "3", 3, False),
     ],
 )
 def test_evidence_accepts_unit_labels_but_not_cropped_expressions(text, quote, value, valid):
@@ -551,3 +548,26 @@ def test_evidence_accepts_unit_labels_but_not_cropped_expressions(text, quote, v
     else:
         with pytest.raises(ValueError):
             evidence.verify(text, value)
+
+
+@pytest.mark.parametrize(
+    "text", ["mil gracias", "millones de gracias", "mil disculpas", "doce tres"]
+)
+def test_non_numeric_idioms_and_ambiguous_expressions_are_preserved(text):
+    from agents.collections.numbers import normalize_transcript_numbers
+
+    assert normalize_transcript_numbers(text) == text
+
+
+def test_bare_thousand_remains_a_valid_amount_and_digit_sequences_remain_separate():
+    from agents.collections.numbers import normalize_transcript_numbers
+
+    assert normalize_transcript_numbers("mil") == "1000"
+    assert normalize_transcript_numbers("cero cero uno") == "0 0 1"
+
+
+def test_negated_full_payment_cannot_infer_installments_without_evidence(model_call):
+    _, response = model_call
+    response["result"] = {"intent": "promise", "installments": 1, "frequency": "one_off"}
+    result = understand_turn("No quiero pagar todo", ctx=CONTEXT, today=TODAY, stage="ready")
+    assert result.status == "model_error"

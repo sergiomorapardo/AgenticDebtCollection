@@ -143,8 +143,10 @@ class NumberEvidence(BaseModel):
     )
 
     def verify(self, text: str, value: int):
-        matches = list(re.finditer(re.escape(self.quote), text, re.IGNORECASE))
-        spans = number_spans(self.quote)
+        text = normalize_words(unicodedata.normalize("NFC", text))
+        quote = normalize_words(unicodedata.normalize("NFC", self.quote))
+        matches = list(re.finditer(re.escape(quote), text))
+        spans = number_spans(quote)
         if len(spans) != 1:
             raise ValueError("Evidence must contain exactly one number")
         start, end = spans[0]
@@ -153,7 +155,7 @@ class NumberEvidence(BaseModel):
             (match.start() + start, match.start() + end) in complete_spans for match in matches
         ):
             raise ValueError("Number evidence is absent from this message")
-        if number_value(self.quote[start:end]) != value:
+        if number_value(quote[start:end]) != value:
             raise ValueError("Number disagrees with its source expression")
 
 
@@ -184,7 +186,9 @@ def number_spans(text: str):
     matches = list(re.finditer(pattern, normalized))
     groups = []
     for match in matches:
-        if groups and re.fullmatch(r"\s+(?:y\s+)?", normalized[groups[-1][1] : match.start()]):
+        if groups and re.fullmatch(
+            r"(?:\s+(?:y\s+)?|\s*[-–]\s*)", normalized[groups[-1][1] : match.start()]
+        ):
             groups[-1] = (groups[-1][0], match.end())
         else:
             groups.append((match.start(), match.end()))
@@ -197,6 +201,10 @@ def normalize_transcript_numbers(text: str, *, identifiers=False) -> str:
     normalized = normalize_words(text)
     for start, end in reversed(number_spans(text)):
         phrase = normalized[start:end]
+        if phrase in {"mil", "millon", "millones"} and re.match(
+            r"\s+(?:de\s+)?(?:gracias|disculpas|perdones)\b", normalized[end:]
+        ):
+            continue
         if re.fullmatch(r"\d+", phrase):
             # A transcription may already contain an identifier with leading zeroes.
             continue
