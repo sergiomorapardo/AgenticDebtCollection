@@ -580,3 +580,237 @@ def test_negated_full_payment_cannot_infer_installments_without_evidence(model_c
     response["result"] = {"intent": "promise", "installments": 1, "frequency": "one_off"}
     result = understand_turn("No quiero pagar todo", ctx=CONTEXT, today=TODAY, stage="ready")
     assert result.status == "model_error"
+
+
+@pytest.mark.parametrize(
+    "text,today,expected,clarification",
+    [
+        ("el viernes", date(2026, 10, 19), date(2026, 10, 23), None),
+        ("el viernes", date(2026, 10, 23), None, "weekday"),
+        ("este viernes", date(2026, 10, 23), date(2026, 10, 23), None),
+        ("el próximo viernes", date(2026, 10, 23), date(2026, 10, 30), None),
+        ("el viernes que viene", date(2026, 10, 23), date(2026, 10, 30), None),
+        ("el 20", date(2026, 10, 19), date(2026, 10, 20), None),
+        ("el veinte", date(2026, 10, 19), date(2026, 10, 20), None),
+        ("20", date(2026, 10, 19), date(2026, 10, 20), None),
+        ("el 2", date(2026, 12, 30), date(2027, 1, 2), None),
+        ("el 20", date(2026, 10, 25), None, "month"),
+        ("20 de noviembre", date(2026, 10, 25), None, "year"),
+        ("31 de febrero", date(2026, 2, 24), None, "invalid"),
+        ("29 de febrero", date(2028, 2, 24), date(2028, 2, 29), None),
+        ("29 de febrero de 2026", date(2026, 2, 24), None, "invalid"),
+        ("el 32", date(2026, 10, 19), None, "invalid"),
+        ("el viernes o el 20", date(2026, 10, 19), None, "multiple"),
+        ("el 20 o 21", date(2026, 10, 19), None, "multiple"),
+        ("no el viernes", date(2026, 10, 19), None, "multiple"),
+    ],
+)
+def test_partial_dates_override_model_guesses_and_never_become_money(
+    model_call, text, today, expected, clarification
+):
+    calls, response = model_call
+    response["result"] = {
+        "intent": "unclear",
+        "payment_date": "2030-01-01",
+        "amount_cop": 20,
+        "amount_evidence": None,
+    }
+    result = understand_turn(
+        text,
+        ctx=CONTEXT,
+        today=today,
+        stage="awaiting_terms",
+        context={
+            "identity_verified": True,
+            "draft_terms": {"route": "negotiation", "installments": 3},
+        },
+    )
+    assert result.status == "classified"
+    assert len(calls) == 1
+    assert result.turn.payment_date == expected
+    assert result.turn.date_clarification == clarification
+    assert result.turn.amount_cop is None
+    assert result.turn.acceptance == "none"
+
+
+def test_date_components_invented_by_model_are_ignored(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "unclear",
+        "payment_date": "2027-12-20",
+        "date_reference": {"quote": "el 20", "day": 20, "month": 12, "year": 2027},
+    }
+    result = understand_turn("el 20", ctx=CONTEXT, today=date(2026, 10, 19), stage="awaiting_terms")
+    assert result.turn.payment_date == date(2026, 10, 20)
+    assert result.turn.date_reference.month is None and result.turn.date_reference.year is None
+
+
+@pytest.mark.parametrize("text", ["pago 600000 el viernes", "pago 600000 pesos el viernes"])
+def test_date_does_not_discard_a_separate_full_payment_amount(text):
+    result = understand_turn(
+        text, ctx=SimpleNamespace(provider="mock"), today=date(2026, 10, 19), stage="ready"
+    )
+    assert result.turn.amount_cop == 600000
+    assert result.turn.payment_date == date(2026, 10, 23)
+
+
+def test_bare_number_is_not_a_date_when_installment_choice_is_pending(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 1,
+        "installments_evidence": {"quote": "1"},
+    }
+    result = understand_turn(
+        "1", ctx=CONTEXT, today=TODAY, stage="ready", context={"dialogue": {"awaiting": "option"}}
+    )
+    assert result.turn.installments == 1 and result.turn.payment_date is None
+
+
+@pytest.mark.parametrize(
+    "text,fields,today,expected",
+    [
+        (
+            "quiero 2 cuotas el 2",
+            {"installments": 2, "installments_evidence": {"quote": "2"}},
+            date(2026, 12, 30),
+            date(2027, 1, 2),
+        ),
+        (
+            "puedo 20 pesos al mes el 20",
+            {"amount_cop": 20, "amount_evidence": {"quote": "20"}, "amount_is_capacity": True},
+            date(2026, 10, 19),
+            date(2026, 10, 20),
+        ),
+    ],
+)
+def test_repeated_number_keeps_distinct_financial_and_date_roles(
+    model_call, text, fields, today, expected
+):
+    _, response = model_call
+    response["result"] = {"intent": "negotiate", **fields}
+    result = understand_turn(text, ctx=CONTEXT, today=today, stage="ready")
+    assert result.status == "classified"
+    assert result.turn.payment_date == expected
+    for key, value in fields.items():
+        if not key.endswith("_evidence"):
+            assert getattr(result.turn, key) == value
+
+
+@pytest.mark.parametrize("text", ["el 20 del próximo mes", "el viernes de la próxima semana"])
+def test_unresolved_calendar_qualifier_requires_clarification(model_call, text):
+    _, response = model_call
+    response["result"] = {"intent": "unclear", "payment_date": "2026-10-20"}
+    result = understand_turn(text, ctx=CONTEXT, today=date(2026, 10, 19), stage="awaiting_terms")
+    assert result.turn.payment_date is None and result.turn.date_clarification == "multiple"
+
+
+def test_old_date_clarification_does_not_capture_a_new_installment_choice(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 3,
+        "installments_evidence": {"quote": "3"},
+    }
+    result = understand_turn(
+        "3",
+        ctx=CONTEXT,
+        today=TODAY,
+        stage="ready",
+        context={"dialogue": {"awaiting": "option", "pending_date": {"quote": "el 20", "day": 20}}},
+    )
+    assert result.turn.installments == 3 and result.turn.payment_date is None
+
+
+@pytest.mark.parametrize(
+    "text,pending,today,expected,question",
+    [
+        (
+            "el próximo",
+            {"quote": "el viernes", "weekday": 4},
+            date(2026, 10, 23),
+            date(2026, 10, 30),
+            None,
+        ),
+        ("octubre", {"quote": "el 20", "day": 20}, date(2026, 10, 26), None, "year"),
+    ],
+)
+def test_pending_date_answer_overrides_process_clarification_classification(
+    model_call, text, pending, today, expected, question
+):
+    _, response = model_call
+    response["result"] = {"intent": "clarify_process"}
+    result = understand_turn(
+        text,
+        ctx=CONTEXT,
+        today=today,
+        stage="awaiting_terms",
+        context={
+            "draft_terms": {"route": "negotiation", "installments": 3},
+            "dialogue": {"awaiting": "date", "pending_date": pending},
+        },
+    )
+    assert result.turn.intent == "unclear"
+    assert result.turn.payment_date == expected
+    assert result.turn.date_clarification == question
+
+
+def test_date_only_answer_cannot_replace_selected_plan_with_model_full_payment(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "promise",
+        "installments": 1,
+        "frequency": "one_off",
+        "payment_date": "2026-10-23",
+    }
+    result = understand_turn(
+        "el viernes",
+        ctx=CONTEXT,
+        today=date(2026, 10, 19),
+        stage="awaiting_terms",
+        context={
+            "draft_terms": {"route": "negotiation", "installments": 3},
+            "dialogue": {"awaiting": "date"},
+        },
+    )
+    assert result.turn.intent == "unclear" and result.turn.installments is None
+    assert result.turn.frequency == "unspecified"
+
+
+def test_spelled_day_does_not_leak_into_amount_when_request_also_selects_installments(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "negotiate",
+        "installments": 3,
+        "installments_evidence": {"quote": "tres"},
+        "amount_cop": 20,
+        "amount_evidence": {"quote": "veinte"},
+    }
+    result = understand_turn(
+        "quiero tres cuotas el veinte", ctx=CONTEXT, today=date(2026, 10, 19), stage="ready"
+    )
+    assert result.status == "classified" and result.turn.amount_cop is None
+    assert result.turn.installments == 3 and result.turn.payment_date == date(2026, 10, 20)
+
+
+def test_confirmation_during_date_question_cannot_reuse_model_supplied_old_date(model_call):
+    _, response = model_call
+    response["result"] = {
+        "intent": "accept_offer",
+        "acceptance": "unconditional_current_offer",
+        "payment_date": "2026-10-23",
+        "date_reference": {"quote": "el viernes", "weekday": 4},
+    }
+    result = understand_turn(
+        "confirmo",
+        ctx=CONTEXT,
+        today=date(2026, 10, 23),
+        stage="awaiting_terms",
+        context={
+            "draft_terms": {"route": "negotiation", "installments": 3},
+            "dialogue": {"awaiting": "date", "pending_date": {"quote": "el viernes", "weekday": 4}},
+        },
+    )
+    assert result.status == "classified"
+    assert result.turn.payment_date is None and result.turn.date_clarification == "weekday"
+    assert result.turn.acceptance == "none" and result.turn.intent == "unclear"

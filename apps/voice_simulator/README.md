@@ -311,15 +311,31 @@ business session across separate voice calls remains unsupported by this isolate
   identity verification and an explicit customer request, preserving history and avoiding
   duplicate agreements. See the [roadmap](../../docs/ROADMAP.md#todo-resume-a-business-session-across-voice-calls).
 
-### Pending date-dialogue acceptance
+### Natural payment dates
 
-- Interpret a weekday such as `el viernes` relative to the configured Colombia clock, and
-  ask which occurrence when the context does not identify one.
-- Accept a day-of-month reply such as `el 20` without treating it as an amount or installment
-  count; ask for the month when needed, including month-end and year-boundary cases.
-- Preserve the selected plan while clarifying the date, then read back the full resolved
-  date and require explicit confirmation before recording a commitment.
-- Verify natural spoken dates, including the correct year, with real provider audio.
+The semantic output includes a typed `PaymentDateReference` with the customer's explicit
+calendar components. The backend resolves supported Spanish forms against the Colombia clock
+and the policy's first-payment window; missing components are not copied from a model guess.
 
-These dialogue acceptance cases are pending; deterministic ISO-to-speech formatting alone
-is not evidence that ambiguous date input is handled correctly.
+| Reply | Behavior |
+| --- | --- |
+| `el viernes` | Resolve the upcoming Friday; if today is Friday, ask whether today or next Friday |
+| `este viernes` / `el próximo viernes` | Resolve the specified occurrence and present its complete date |
+| `el 20` / `el veinte` | Use the unique matching day in the allowed window; otherwise ask for month and year |
+| `20` after a date question | Complete the selected plan, never reinterpret it as COP 20 or 20 installments |
+| `octubre` / `2026` after clarification | Complete the pending month/year while retaining the original day and plan |
+| `31 de febrero` or alternative dates | Ask for a valid, unambiguous calendar date |
+| `confirmo` while a date is unresolved | Repeat the clarification; create neither an offer nor a commitment |
+
+A date change invalidates an earlier offer. Once resolved, the complete installment schedule
+is presented with full ISO dates in writing and natural Spanish dates in speech. Only a new,
+explicit confirmation can record that offer. Existing date-window and contact rules still apply.
+Unknown calendar qualifiers prompt for a complete date instead of silently choosing one.
+The audio-completion gate now runs before routing acceptance to confirmation; final offer
+validation still runs at confirmation, and interrupted offers are replayed in full.
+
+Regressions cover month/year boundaries, leap days, invalid dates, ambiguous weekdays,
+short follow-ups, stale-offer acceptance, preserved plans, and separate monetary/count roles.
+Live Haiku checks reproduced and then verified short month and next-week follow-ups with
+synthetic data; no speech synthesis or microphone recording was needed for those checks.
+The earlier offline ASR uncertainty about the spoken year remains a voice acceptance limit.

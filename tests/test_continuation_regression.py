@@ -443,3 +443,124 @@ def test_polite_closure_acknowledgement_does_not_reopen(refused_conversation, mo
     assert result["reply"]["stage"] == "closed"
     assert ctx.repository.get_session(session_id)["close_reason"] == "repeated_refusal"
     assert not ctx.repository.agreements()
+
+
+@pytest.fixture
+def date_conversation(tmp_path, monkeypatch):
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
+
+    def create(day="2026-10-19"):
+        ctx = AppContext(
+            SQLiteRepository(tmp_path / (day + ".db")),
+            datetime.fromisoformat(day + "T09:00:00-05:00"),
+            provider="mock",
+        )
+        graph = build_graph(studio=True, checkpointer=InMemorySaver())
+        config = {"configurable": {"thread_id": "date-dialogue"}}
+        sequence = 0
+
+        def send(text):
+            nonlocal sequence
+            sequence += 1
+            return graph.invoke(
+                {"messages": [HumanMessage(content=text, id=str(sequence))]},
+                config=config,
+                context=ctx,
+            )["reply"]
+
+        send("123456789")
+        send("1111")
+        session_id = ChatMemory(ctx.repository).binding("date-dialogue")["session_id"]
+        return send, ctx, session_id
+
+    return create
+
+
+@pytest.mark.parametrize(
+    "answer,expected",
+    [
+        ("el viernes", "2026-10-23"),
+        ("el 20", "2026-10-20"),
+        ("20", "2026-10-20"),
+        ("el veinte", "2026-10-20"),
+    ],
+)
+def test_date_only_answer_preserves_plan_and_requires_full_offer_confirmation(
+    date_conversation, answer, expected
+):
+    send, ctx, sid = date_conversation()
+    send("quiero 3 cuotas")
+    reply = send(answer)
+    assert reply["stage"] == "awaiting_confirmation"
+    assert expected in reply["text"] and "200,000 COP" in reply["text"]
+    assert "Confirmas" in reply["text"]
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    assert not ctx.repository.agreements()
+    assert send("confirmo")["stage"] == "agreed"
+    assert len(ctx.repository.agreements()) == 1
+
+
+def test_same_weekday_clarifies_and_bare_confirmation_cannot_accept(date_conversation):
+    send, ctx, sid = date_conversation("2026-10-23")
+    send("quiero 3 cuotas")
+    question = send("el viernes")
+    assert question["stage"] == "awaiting_terms" and not question["offer_id"]
+    assert "2026-10-23" in question["text"] and "2026-10-30" in question["text"]
+    assert not send("confirmo")["offer_id"]
+    assert not ctx.repository.agreements()
+    proposal = send("el próximo")
+    assert proposal["stage"] == "awaiting_confirmation"
+    assert "2026-10-30" in proposal["text"] and "200,000 COP" in proposal["text"]
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    assert not ctx.repository.agreements()
+
+
+def test_day_outside_window_asks_month_then_year_without_losing_plan(date_conversation):
+    send, ctx, sid = date_conversation("2026-10-26")
+    send("quiero 3 cuotas")
+    reply = send("el 20")
+    assert "mes y año" in reply["text"]
+    assert not reply["offer_id"]
+    reply = send("noviembre")
+    assert "qué año" in reply["text"]
+    reply = send("2026")
+    assert "entre hoy y siete días" in reply["text"]
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    assert not ctx.repository.agreements()
+    reply = send("el viernes")
+    assert reply["stage"] == "awaiting_confirmation" and "2026-10-30" in reply["text"]
+
+
+def test_ambiguous_new_date_invalidates_previous_offer_and_preserves_terms(date_conversation):
+    send, ctx, sid = date_conversation()
+    prior = send("quiero 3 cuotas desde 2026-10-20")
+    assert prior["offer_id"]
+    reply = send("el viernes o el 20")
+    assert reply["offer_id"] is None and "más de una interpretación" in reply["text"]
+    assert ctx.repository.get_session(sid)["draft_terms"].get("payment_date") is None
+    assert send("confirmo")["offer_id"] is None
+    assert not ctx.repository.agreements()
+
+
+@pytest.mark.parametrize(
+    "today,answer,expected",
+    [("2026-12-30", "el 2", "2027-01-02"), ("2028-02-24", "29 de febrero", "2028-02-29")],
+)
+def test_date_resolution_handles_year_boundary_and_leap_day(
+    date_conversation, today, answer, expected
+):
+    send, ctx, _ = date_conversation(today)
+    send("quiero 3 cuotas")
+    reply = send(answer)
+    assert reply["stage"] == "awaiting_confirmation" and expected in reply["text"]
+    assert not ctx.repository.agreements()
+
+
+def test_impossible_calendar_date_asks_for_correction(date_conversation):
+    send, ctx, sid = date_conversation("2026-02-24")
+    send("quiero 3 cuotas")
+    reply = send("31 de febrero")
+    assert "no existe" in reply["text"] and reply["offer_id"] is None
+    assert ctx.repository.get_session(sid)["draft_terms"]["installments"] == 3
+    assert not ctx.repository.agreements()
